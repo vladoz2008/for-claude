@@ -615,7 +615,6 @@ void main() {
       }
 
       function onPointerDown(e) {
-        console.log('DEBUG pointerdown', e.pointerId, e.clientX, e.clientY);
         canvas.setPointerCapture(e.pointerId);
         const [cx, cy] = eventToCell(e);
         pointers.set(e.pointerId, { sx: e.clientX, sy: e.clientY, cx, cy, moved: false });
@@ -628,7 +627,6 @@ void main() {
         p.moved = true;
         const [cx, cy] = eventToCell(e);
         const moved2 = Math.hypot(cx - p.cx, cy - p.cy);
-        console.log('DEBUG pointermove moved2=', moved2, 'queueLen=', stirQueue.length);
         if (moved2 > 1.5 && stirQueue.length < MAX_STIR_POINTS) {
           stirQueue.push(cx, cy);
           p.cx = cx; p.cy = cy;
@@ -650,7 +648,6 @@ void main() {
 
       function flushStir(seed) {
         if (stirQueue.length === 0) return;
-        console.log('DEBUG flushStir count=', stirQueue.length / 2, stirQueue.slice(0, 4));
         const count = Math.min(MAX_STIR_POINTS, stirQueue.length / 2);
         const pts = new Float32Array(MAX_STIR_POINTS * 2);
         pts.set(stirQueue.slice(0, MAX_STIR_POINTS * 2));
@@ -664,8 +661,12 @@ void main() {
         gl.uniform2f(uStir.uGridSize, gridW, gridH);
         gl.uniform2fv(uStir.uPoints, pts);
         gl.uniform1i(uStir.uPointCount, count);
+        // Tuned in scratchpad/tune-stir.cjs against the real growth/kernel constants: below
+        // ~0.28 an isolated brush stroke always dissolves within ~1s of releasing (no runaway
+        // "spontaneous life"); 0.22 is comfortably under that critical mass while still building
+        // a clearly visible glow within a few frames of continuous dragging.
         gl.uniform1f(uStir.uRadius, Math.min(gridW, gridH) * 0.04);
-        gl.uniform1f(uStir.uAmp, 0.09); // subtle — "feeding", not painting
+        gl.uniform1f(uStir.uAmp, 0.22);
         gl.uniform1f(uStir.uSeed, seed);
         gl.drawArrays(gl.TRIANGLES, 0, 3);
         stateIdx = dst;
@@ -738,13 +739,16 @@ void main() {
         }
         applyCanvasSize();
 
-        if (stirQueue.length) flushStir(now * 0.001);
-
         if (!paused) {
           simTime += dt * 0.001;
           for (let i = 0; i < stepsPerFrame; i++) simStep();
           trailStep();
         }
+        // Stirring is applied AFTER this frame's automaton step and BEFORE display, so a
+        // fresh brushstroke is always visible the instant it's drawn — it only starts decaying
+        // on the *next* frame's step, instead of being erased before it's ever shown.
+        if (stirQueue.length) flushStir(now * 0.001);
+
         renderDisplay(reducedMotion ? 0 : simTime);
       }
       raf = requestAnimationFrame(frame);

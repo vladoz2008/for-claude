@@ -51,7 +51,7 @@
     // ---- physical constants (r_s = 1) --------------------------------------------------------
     const float DISK_INNER = 3.0;    // ISCO for Schwarzschild: r = 3 r_s
     const float DISK_OUTER = 13.0;
-    const float T0 = 9500.0;         // reference temperature scale for the blackbody map (K):
+    const float T0 = 7800.0;         // reference temperature scale for the blackbody map (K):
                                       // tuned so the disk spans white-hot inner gas to deep
                                       // orange/red at the outer edge, like the real T(r) profile.
     const float BASE_BRIGHT = 1.75;
@@ -149,6 +149,10 @@
       }
 
       vec3 col = blackbody(T * g);
+      // The raw blackbody curve desaturates fast toward white - push it a little further from
+      // grey so the hot-white / cool-orange contrast across the disk actually reads on screen.
+      float lum = dot(col, vec3(0.299, 0.587, 0.114));
+      col = clamp(lum + (col - lum) * 1.45, 0.0, 4.0);
       float intensity = pow(max(g, 0.0001), 4.0);   // relativistic beaming, I_obs ~ g^4 I_emit
       vec3 emit = col * intensity * BASE_BRIGHT * density;
       float alpha = clamp(density * 0.62, 0.0, 1.0);
@@ -190,8 +194,10 @@
                          : vec3(starFaceUv.x, starFaceUv.y, axisSign);
             starDir = normalize(starDir);
             float cosAng = dot(dir, starDir);
-            float size = mix(0.0006, 0.009, h2v) * sizeScale;
-            acc += smoothstep(1.0 - size, 1.0, cosAng) * mix(0.4, 1.7, h2v);
+            // Angular radius in RADIANS (not a uv-space fraction) - keeps stars pinpoint-sized
+            // regardless of grid density, instead of blowing up into multi-cell blobs.
+            float angRad = mix(0.0015, 0.006, h2v) * sizeScale;
+            acc += smoothstep(cos(angRad), 1.0, cosAng) * mix(0.4, 1.7, h2v);
           }
         }
       }

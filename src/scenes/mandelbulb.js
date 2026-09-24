@@ -132,16 +132,17 @@ vec3 shadeAlbedo(vec4 trap, float ao, vec3 p) {
   float core = clamp(trap.w * 2.3, 0.0, 1.0);
   vec3 base = mix(bone, ivory, smoothstep(0.15, 0.85, core));
 
-  // crevices - wherever the surface is occluded (low ao) - pick up an
-  // oxidised patina. Which of copper or verdigris dominates a given fold
-  // is a slow spatial pattern over the *surface point itself*, not a trap
-  // channel - the trap metrics dip in lockstep with ao at every crease, so
-  // keying hue off them would always pick the same colour where it matters.
+  // crevices - detected from the orbit trap, which dips reliably wherever
+  // the surface folds toward the symmetry axes - pick up an oxidised
+  // patina. Which of copper or verdigris dominates a given fold is a slow
+  // spatial pattern over the surface point itself, deliberately decoupled
+  // from the fold detector so both colours appear as separate patches
+  // rather than one hue always winning where the patina actually shows.
+  float fold = 1.0 - smoothstep(0.0, 0.32, min(trap.x, trap.y));
   float marble = sin(p.x * 5.0) * sin(p.y * 4.3 + 1.7) * sin(p.z * 6.1 + 0.4);
   float hueMix = smoothstep(-0.2, 0.2, marble);
   vec3 patina = mix(verdigris, copper, hueMix);
-  float crevice = 1.0 - smoothstep(0.28, 0.82, ao);
-  return mix(base, patina, crevice * 0.85);
+  return mix(base, patina, fold * 0.72);
 }
 
 void main() {
@@ -156,7 +157,11 @@ void main() {
   vec3 up = cross(right, fwd);
   // uv spans roughly [-0.5, 0.5] vertically, so the focal length that maps
   // that span to the requested vertical FOV is 0.5 / tan(fov/2), not 1/tan(fov/2).
-  float focal = 0.5 / tan(uFov * 0.5);
+  // On a portrait/narrow canvas that alone would only fit the *vertical*
+  // extent and crop the sides, so the FOV is widened by the aspect ratio
+  // whenever width < height - the bulb then always fits the smaller side.
+  float fitScale = min(uRes.x / uRes.y, 1.0);
+  float focal = (0.5 / tan(uFov * 0.5)) * fitScale;
   vec3 rd = normalize(uv.x * right + uv.y * up + focal * fwd);
   vec3 ro = uCamPos;
   float pixelAngle = 1.0 / (uRes.y * focal);
@@ -197,9 +202,6 @@ void main() {
     vec3 p = ro + rd * t;
     vec3 n = calcNormal(p, uPower);
     float ao = calcAO(p, n, uPower);
-    // crevice colour is driven by ambient occlusion, not the orbit trap
-    // alone, so the verdigris/copper patina lands exactly where the
-    // surface folds into shadow - like oxidation pooling in real crevices.
     vec3 albedo = shadeAlbedo(trap, ao, p);
 
     // a raking, slightly side-on key light carves a clear light/dark
@@ -221,7 +223,7 @@ void main() {
     // deep, occluded folds go toward blue-black rather than flat grey -
     // this is what reads as "shadow" on a mineral specimen rather than haze.
     vec3 shadowTint = vec3(0.02, 0.035, 0.07);
-    lit *= mix(shadowTint, vec3(1.0), pow(ao, 1.6));
+    lit *= mix(shadowTint, vec3(1.0), pow(ao, 1.15));
 
     col = mix(lit, bg, smoothstep(BOUND * 2.0, 9.0, t));
   }
@@ -337,7 +339,8 @@ void main() {
       const DEFAULTS = { azimuth: 0.6, elevation: 0.22, zoom: 1.0 };
       let azimuth = DEFAULTS.azimuth;
       let elevation = DEFAULTS.elevation;
-      let zoom = DEFAULTS.zoom;
+      let zoomTarget = DEFAULTS.zoom;
+      let zoom = DEFAULTS.zoom; // damped toward zoomTarget each frame
       let lastInteract = -999;
 
       // -- toggles ------------------------------------------------------
@@ -382,7 +385,7 @@ void main() {
         lastInteract = performance.now() / 1000;
         if (pointers.size === 2) {
           pinchStartDist = pointerDist();
-          pinchStartZoom = zoom;
+          pinchStartZoom = zoomTarget;
         }
       }
       function onPointerMove(e) {
@@ -401,7 +404,7 @@ void main() {
           pt.y = e.clientY;
           const d = pointerDist();
           if (pinchStartDist > 1) {
-            zoom = clamp(pinchStartZoom * (pinchStartDist / Math.max(d, 1)), 0.45, 2.4);
+            zoomTarget = clamp(pinchStartZoom * (pinchStartDist / Math.max(d, 1)), 0.45, 2.4);
           }
         }
       }
@@ -412,7 +415,7 @@ void main() {
       }
       function onWheel(e) {
         e.preventDefault();
-        zoom = clamp(zoom * Math.exp(e.deltaY * 0.0011), 0.45, 2.4);
+        zoomTarget = clamp(zoomTarget * Math.exp(e.deltaY * 0.0011), 0.45, 2.4);
         lastInteract = performance.now() / 1000;
       }
       function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
@@ -458,6 +461,7 @@ void main() {
       function reset() {
         azimuth = DEFAULTS.azimuth;
         elevation = DEFAULTS.elevation;
+        zoomTarget = DEFAULTS.zoom;
         zoom = DEFAULTS.zoom;
         simTime = 0;
         paused = false;
@@ -495,11 +499,15 @@ void main() {
 
         const motionScale = reduceMotion && reduceMotion.matches ? 0.35 : 1.0;
         const idle = nowS - lastInteract > 4.0;
-        if (idle) {
+        if (idle && !paused) {
           azimuth += 0.028 * motionScale * dt;
           const elevTarget = 0.20 * Math.sin(simTime * 0.037);
           elevation += (elevTarget - elevation) * Math.min(1, dt * 0.5);
         }
+        // damp the user's zoom toward its target so wheel/pinch input eases
+        // in rather than snapping the camera distance in one frame.
+        zoom += (zoomTarget - zoom) * Math.min(1, dt * 8);
+
         // orbit distance breathes slowly between a full-specimen view and a
         // closer pass that reveals fine surface detail; zoom scales on top.
         const distBreathe = 3.6 + 2.2 * (0.5 + 0.5 * Math.sin(simTime * 0.05 * motionScale + 1.3));
