@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>lenia dev</title>
+<style>
+  html, body { margin: 0; background: #05060a; }
+  #host { position: fixed; inset: 0; }
+  #ui { position: fixed; top: 16px; right: 16px; display: flex; gap: 8px; z-index: 2; }
+  .ctl {
+    font: 13px system-ui, sans-serif;
+    padding: 6px 10px;
+    border-radius: 6px;
+    border: 1px solid rgba(255,255,255,0.25);
+    background: rgba(20,20,24,0.6);
+    color: #eee;
+    cursor: pointer;
+  }
+</style>
+</head>
+<body>
+<div id="host"></div>
+<div id="ui"></div>
+<script src="../src/scenes/lenia.js"></script>
+<script>
+  const host = document.getElementById('host');
+  const ui = document.getElementById('ui');
+  const params = new URLSearchParams(location.search);
+  const q = params.get('q');
+  if (q !== null) host.dataset.fixedQuality = q;
+  let h = window.SCENES.lenia.mount(host, ui);
+  window.__remount = () => {
+    h.unmount();
+    h = window.SCENES.lenia.mount(host, ui);
+  };
+</script>
+</body>
+</html>
