@@ -244,8 +244,8 @@
               // Never let a star shrink below ~0.7 pixels - smaller than that and single-sample
               // (no supersampling) rendering aliases it into a jagged sliver depending on exactly
               // where its centre falls relative to the pixel grid.
-              float desiredRad = u_pixelAngle * mix(0.55, 1.5, pow(hBright, 3.0));
-              float angRad = max(desiredRad, u_pixelAngle * 0.7);
+              float desiredRad = u_pixelAngle * mix(0.7, 1.6, pow(hBright, 3.0));
+              float angRad = max(desiredRad, u_pixelAngle * 1.0);
               // A Gaussian (rather than a hard-edged smoothstep disc) falls off gracefully at
               // sub-pixel scale instead of aliasing into a jagged or lopsided shape.
               float shape = exp(-(d * d) / (2.0 * angRad * angRad));
@@ -290,6 +290,31 @@
       vec3 vel = rd;
       float h2 = dot(cross(pos, vel), cross(pos, vel));
 
+      // Impact parameter b = sqrt(h2) (exact for the initial unit-speed ray): the perpendicular
+      // distance from the hole to the ray's straight line. Since the disk's outer edge is at
+      // r = 13, ANY ray that actually crosses the disk has b <= 13 (b is by definition the
+      // closest approach of the line to the origin, so it can only be <= the distance to any
+      // point on that line, including the crossing point). So b > 20 rays can never touch the
+      // disk and bend by a genuinely negligible amount - go straight to the sky with the exact
+      // pixel direction. This is not just a performance shortcut: doing the full RK4 walk here
+      // anyway (bending or not) accumulates tiny per-step floating-point drift in vel that,
+      // while physically insignificant, is comparable to a sub-pixel star's own angular size and
+      // visibly jitters it into a streak - using the exact, undrifted rd keeps stars crisp and
+      // round for the ~95% of the sky that is far from the hole.
+      if (h2 > 400.0) {
+        vec4 s = vec4(0.0);
+        if (abs(rd.y) > 1e-6) {
+          float t = -pos.y / rd.y;
+          if (t > 0.0) {
+            vec3 hitP = pos + t * rd;
+            float rDisk = length(hitP.xz);
+            if (rDisk > DISK_INNER && rDisk < DISK_OUTER) s = diskShade(hitP, rd, rDisk);
+          }
+        }
+        outColor = vec4(s.rgb + (1.0 - s.a) * sky(rd), 1.0);
+        return;
+      }
+
       vec3 colorAccum = vec3(0.0);
       float alphaAccum = 0.0;
       bool captured = false;
@@ -305,12 +330,23 @@
         if (r > FAR && dot(pos, vel) > 0.0) { escaped = true; break; }
 
         // Adaptive step: small near the hole and disk (where curvature is strong and the disk
-        // crossing point needs sub-pixel precision), then MUCH larger once we're well clear of
-        // that zone so the ray blasts out to FAR in only a handful of steps. Without this second
-        // regime, a small capped step size takes many near-uniform steps to cross r=16..FAR,
-        // and slight per-pixel differences in how many steps that takes show up as faint
-        // concentric ring banding in the sky once escaped.
-        float dt = r > 16.0 ? clamp(r * 0.6, 1.5, 25.0) : clamp(r * 0.14, 0.012, 1.3);
+        // crossing point needs sub-pixel precision), then AGGRESSIVELY large once a ray is both
+        // clear of that zone (r > 16, over 10x the photon sphere) AND actually moving outward -
+        // dot(pos, vel) > 0 is essential here: a ray can easily start at r > 16 while still
+        // heading INWARD toward its closest approach (this is exactly the case for a ray that
+        // ends up bent over the shadow into a lensed image of the disk's far side). Speeding up
+        // by r alone, regardless of direction, let such a ray take one huge first step and blow
+        // straight through the entire near-hole region it was supposed to curve around, which
+        // silently deleted the lensed arc. Once a ray IS moving outward past r = 16, though,
+        // curvature is negligible and it can safely cross r=16..FAR in one or two steps instead
+        // of several - which also matters for more than performance: each RK4 step accumulates a
+        // little floating-point rounding in the direction vector, and several steps' worth of
+        // that, while physically insignificant, was large enough to visibly jitter sub-pixel
+        // background stars into streaks. Fewer steps means less drift and a genuinely round
+        // point, and it also removes the faint concentric ring banding that per-pixel
+        // differences in step count used to leave in the sky once escaped.
+        bool movingOut = dot(pos, vel) > 0.0;
+        float dt = (r > 16.0 && movingOut) ? clamp(r * 3.0, 6.0, 200.0) : clamp(r * 0.14, 0.012, 1.3);
 
         vec3 prevPos = pos;
         rk4Step(pos, vel, h2, dt);

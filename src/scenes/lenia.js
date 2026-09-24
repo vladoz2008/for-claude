@@ -15,8 +15,8 @@
   const MU = 0.15;        // growth curve centre
   const SIGMA = 0.015;     // growth curve width
   const DT = 0.1;         // time step (T = 1/dt = 10)
-  const SHORT_SIDE = 200;  // world cells along the shorter side of the viewport
-  const TRAIL_RATE = 0.015; // EMA rate for the phosphorescent trail buffer
+  const SHORT_SIDE = 160;  // world cells along the shorter side of the viewport
+  const TRAIL_RATE = 0.008; // EMA rate for the phosphorescent trail buffer — small = long memory
   const MAX_STIR_POINTS = 10;
 
   // Orbium unicaudatus — the 20x20 seed pattern from Bert Chan's Lenia tutorial notebook.
@@ -185,10 +185,10 @@ int wrapi(int v, int n) { int m = v % n; return m < 0 ? m + n : m; }
 float texelAt(sampler2D tex, ivec2 c, ivec2 size) {
   return texelFetch(tex, ivec2(wrapi(c.x, size.x), wrapi(c.y, size.y)), 0).r;
 }
-// Manual smooth (bilinear + smootherstep) upsampling of the low-res sim grid, done with
-// texelFetch so it works on plain NEAREST float textures without needing linear-filterable
-// float support from the GPU/driver.
-float sampleSmooth(sampler2D tex, vec2 uv, ivec2 size) {
+
+// Bilinear (+smootherstep) upsampling — used for the trail and growth fields, which are
+// already diffuse/soft, so a cheaper 4-tap filter is indistinguishable from bicubic there.
+float sampleBilinear(sampler2D tex, vec2 uv, ivec2 size) {
   vec2 texel = uv * vec2(size) - 0.5;
   vec2 i0f = floor(texel);
   vec2 f = smoothstep(0.0, 1.0, texel - i0f);
@@ -199,39 +199,103 @@ float sampleSmooth(sampler2D tex, vec2 uv, ivec2 size) {
   float v11 = texelAt(tex, i0 + ivec2(1, 1), size);
   return mix(mix(v00, v10, f.x), mix(v01, v11, f.x), f.y);
 }
+
+// Catmull-Rom cubic weights for a fractional offset t, for the 4 taps at relative x = -1,0,1,2.
+vec4 cubicWeights(float t) {
+  float t2 = t * t, t3 = t2 * t;
+  return vec4(
+    -0.5 * t3 +       t2 - 0.5 * t,
+     1.5 * t3 - 2.5 * t2 + 1.0,
+    -1.5 * t3 + 2.0 * t2 + 0.5 * t,
+     0.5 * t3 - 0.5 * t2
+  );
+}
+// 4x4-tap Catmull-Rom bicubic, done with texelFetch (no linear-filterable-float dependency).
+// This is what turns the low-res simulation grid into a continuous, softly-curved membrane
+// instead of a stepped/blocky upscale — used for the body, since that's what the eye reads
+// edges from.
+float sampleBicubic(sampler2D tex, vec2 uv, ivec2 size) {
+  vec2 texel = uv * vec2(size) - 0.5;
+  vec2 i0f = floor(texel);
+  vec2 f = texel - i0f;
+  vec4 wx = cubicWeights(f.x);
+  vec4 wy = cubicWeights(f.y);
+  ivec2 i0 = ivec2(i0f);
+  float result = 0.0;
+  for (int j = 0; j < 4; j++) {
+    float row = 0.0;
+    for (int i = 0; i < 4; i++) row += texelAt(tex, i0 + ivec2(i - 1, j - 1), size) * wx[i];
+    result += row * wy[j];
+  }
+  return result;
+}
+
+// Cheap ring-sampled halo standing in for a separable blur: a handful of wide taps around the
+// point, averaged, so bright tissue gets a soft bloom without an extra render pass.
+float sampleBloom(sampler2D tex, vec2 uv, ivec2 size) {
+  vec2 center = uv * vec2(size);
+  ivec2 ic = ivec2(floor(center));
+  float sum = texelAt(tex, ic, size) * 0.3;
+  const int N = 8;
+  for (int k = 0; k < N; k++) {
+    float ang = 6.28318530718 * float(k) / float(N);
+    vec2 off = vec2(cos(ang), sin(ang)) * 4.0;
+    sum += texelAt(tex, ic + ivec2(floor(off + 0.5)), size) * (0.7 / float(N));
+  }
+  return sum;
+}
+
 float hash(vec2 p) { p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
 
 void main() {
   ivec2 size = ivec2(uGridSize);
-  float a = clamp(sampleSmooth(uState, vUv, size), 0.0, 1.0);
-  float t = clamp(sampleSmooth(uTrail, vUv, size), 0.0, 1.0);
-  float g = sampleSmooth(uGrowth, vUv, size);
+  float a = clamp(sampleBicubic(uState, vUv, size), 0.0, 1.0);
+  float t = clamp(sampleBilinear(uTrail, vUv, size), 0.0, 1.0);
+  float g = sampleBilinear(uGrowth, vUv, size);
+  float bloom = sampleBloom(uState, vUv, size);
 
   // Bioluminescent microscopy palette: dark ground -> dim tissue trail -> living body ->
   // bright tissue -> near-white cores, layered by increasing state intensity.
   vec3 ground  = vec3(0.0118, 0.0314, 0.0392);
-  vec3 trailC  = vec3(0.0510, 0.2275, 0.2510);
+  vec3 trailC  = vec3(0.0706, 0.2980, 0.3220); // brightened dim-teal, so wakes read clearly
   vec3 bodyC   = vec3(0.1843, 0.7255, 0.6471);
   vec3 brightC = vec3(0.8471, 0.9490, 0.7686);
   vec3 coreC   = vec3(0.9647, 1.0, 0.9412);
+  vec3 warmC   = vec3(0.9490, 0.7608, 0.4824); // #F2C27B — the leading, growing edge
 
-  vec3 col = mix(ground, trailC, smoothstep(0.03, 0.5, t));
+  vec3 col = mix(ground, trailC, smoothstep(0.015, 0.35, t));
   col = mix(col, bodyC, smoothstep(0.06, 0.32, a));
   col = mix(col, brightC, smoothstep(0.34, 0.66, a));
   col = mix(col, coreC, smoothstep(0.68, 0.97, a));
-  col += coreC * clamp(g, 0.0, 1.0) * a * 0.18; // faint glow on actively-growing membrane
 
-  // Dark-field microscope vignette.
+  // Metabolism colour: G > 0 is tissue being built (the leading edge a creature swims into) —
+  // tint it warm. G < 0 is tissue decaying back down (the trailing edge) — left as the cool
+  // teal/white body colours above, untouched. A true, if subtle, readout of the growth field
+  // itself: each creature ends up with a warm "front" and a cool "tail". The growing band sits
+  // mostly where tissue is still thin (low a, not yet full body), so gate presence with a low
+  // threshold rather than raw a — multiplying by a directly would suppress the tint exactly
+  // where growth is strongest.
+  float gPos = clamp(g, 0.0, 1.0);
+  float presence = smoothstep(0.02, 0.2, a);
+  col = mix(col, warmC, gPos * presence * 0.55);
+
+  // Soft bloom under bright tissue, like light scattering through tissue and water.
+  col += brightC * bloom * bloom * 0.5;
+
+  // Dark-field microscope vignette: a soft, wide falloff (never a hard mask) plus a faint cool
+  // darkening further out, for the sense of a lit field even against a near-black background.
   vec2 p = (vUv * 2.0 - 1.0);
   p.x *= uResolution.x / uResolution.y;
-  float vig = smoothstep(1.15, 0.35, length(p));
-  col *= mix(0.5, 1.0, vig);
+  float r = length(p);
+  float vig = smoothstep(0.55, 1.35, r);
+  col *= mix(1.0, 0.78, vig);
+  col -= vec3(0.0, 0.006, 0.008) * smoothstep(0.75, 1.35, r);
 
   // Very faint animated grain — keeps the dish from reading as a flat digital gradient.
   float n = hash(vUv * uResolution.xy * 0.5 + uTime * 97.0);
   col += (n - 0.5) * 0.018;
 
-  fragColor = vec4(col, 1.0);
+  fragColor = vec4(max(col, 0.0), 1.0);
 }`;
 
   // ---- small GL helpers ----------------------------------------------------------------------
@@ -282,7 +346,7 @@ void main() {
       ['Ядро', 'кольцо, R = 13 клеток'],
       ['Рост', 'μ = 0,15, σ = 0,015'],
       ['Шаг времени', 'Δt = 0,1 (T = 10)'],
-      ['Мир', 'тор, короткая сторона ≈ 200 клеток, длинная — по пропорциям экрана'],
+      ['Мир', 'тор, короткая сторона ≈ 160 клеток, длинная — по пропорциям экрана'],
       ['Вид', 'Orbium unicaudatus'],
       ['Автор модели', 'Берт Чан, 2019']
     ],
@@ -498,20 +562,19 @@ void main() {
       function seedDish() {
         clearAll();
         const short = Math.min(gridW, gridH);
-        const nOrbium = 8 + Math.floor(Math.random() * 7); // 8..14
+        const nOrbium = 10 + Math.floor(Math.random() * 5); // 10..14
         const placed = [];
         // Keep freshly-seeded creatures outside each other's kernel reach (radius R) at spawn
         // time, so the dish opens with everyone swimming independently rather than already
         // merging. Two Orbium bodies (radius ~patternHalf) only start influencing each other's
         // growth once their centres are closer than roughly R + patternHalf (~25 cells); this
-        // uses a generous margin beyond that so the dish opens with a good stretch of graceful,
-        // independent swimming before paths are likely to cross. Checked against the actual
-        // placement algorithm (scratchpad/test-placement.cjs) to stay comfortably achievable
-        // within the rejection-sampling attempt budget even at 14 creatures on a phone-sized
-        // grid. Collisions are still expected eventually — Orbium-Orbium contact has no
-        // special-cased "bounce", it can merge, destroy both, or spawn a stable compound,
-        // entirely as a consequence of the same shared growth field.
-        const minDist = 40;
+        // keeps a margin beyond that. Checked against the actual placement algorithm
+        // (scratchpad/test-placement.cjs) to stay a 0%-forced-close fit up to 14 creatures on
+        // both a desktop- and a phone-sized grid at the current SHORT_SIDE. Collisions are still
+        // expected eventually — Orbium-Orbium contact has no special-cased "bounce", it can
+        // merge, destroy both, or spawn a stable compound, entirely as a consequence of the same
+        // shared growth field.
+        const minDist = 36;
         for (let i = 0; i < nOrbium; i++) {
           let cx = 0, cy = 0, ok = false;
           for (let attempt = 0; attempt < 30 && !ok; attempt++) {
