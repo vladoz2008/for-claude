@@ -632,7 +632,6 @@ void main() {
 
       function onPointerDown(e) {
         canvas.setPointerCapture(e.pointerId);
-        const [cx, cy] = eventToCell(e);
         pointers.set(e.pointerId, { sx: e.clientX, sy: e.clientY, moved: false });
       }
       function onPointerMove(e) {
