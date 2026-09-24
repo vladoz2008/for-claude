@@ -123,13 +123,17 @@ vec3 tonemap(vec3 x) {
 vec3 shadeAlbedo(vec4 trap, float ao, vec3 p) {
   vec3 verdigris = vec3(0.110, 0.440, 0.355);
   vec3 copper    = vec3(0.680, 0.335, 0.130);
-  vec3 bone      = vec3(0.580, 0.535, 0.440);
-  vec3 ivory     = vec3(0.950, 0.910, 0.800);
+  // paler bone/ivory (~#D9CBB0 at the pale end) so exposed convex lobes
+  // read as warm bone/ivory once lit, instead of settling into a muddy
+  // mid-grey - and reached over a wider range of "core" so more of the
+  // smooth surface gets there, not just the very centre of each lobe.
+  vec3 bone      = vec3(0.680, 0.620, 0.500);
+  vec3 ivory     = vec3(0.880, 0.800, 0.640);
 
   // smooth outer lobes: bone through to bright ivory, varied a little by
   // how deep the orbit dove during iteration (trap.w).
   float core = clamp(trap.w * 2.3, 0.0, 1.0);
-  vec3 base = mix(bone, ivory, smoothstep(0.15, 0.85, core));
+  vec3 base = mix(bone, ivory, smoothstep(0.05, 0.6, core));
 
   // crevices - detected from the orbit trap, which dips reliably wherever
   // the surface folds toward the symmetry axes - pick up an oxidised
@@ -225,7 +229,9 @@ void main() {
     float diff = max(dot(n, lightDir), 0.0);
     float shadow = softShadow(p + n * 0.003, lightDir, uPower);
     vec3 keyColor = vec3(1.0, 0.78, 0.53); // ~3200K tungsten
-    vec3 key = keyColor * pow(diff, 1.4) * shadow * 1.3;
+    // ~1.8x brighter than the first pass: lobes facing the key should be
+    // the brightest thing in frame, reading as warm ivory/bone, not grey.
+    vec3 key = keyColor * pow(diff, 1.4) * shadow * 2.3;
 
     // fill: much weaker and cool - stands in for bounced light so the
     // shadow side doesn't go pure flat; AO does the real darkening.

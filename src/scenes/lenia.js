@@ -503,10 +503,15 @@ void main() {
         // Keep freshly-seeded creatures outside each other's kernel reach (radius R) at spawn
         // time, so the dish opens with everyone swimming independently rather than already
         // merging. Two Orbium bodies (radius ~patternHalf) only start influencing each other's
-        // growth once their centres are closer than roughly R + patternHalf; this gives a
-        // comfortable margin beyond that so early collisions are a matter of them swimming
-        // into each other, not bad luck at spawn.
-        const minDist = 2 * R + patternHalf;
+        // growth once their centres are closer than roughly R + patternHalf (~25 cells); this
+        // uses a generous margin beyond that so the dish opens with a good stretch of graceful,
+        // independent swimming before paths are likely to cross. Checked against the actual
+        // placement algorithm (scratchpad/test-placement.cjs) to stay comfortably achievable
+        // within the rejection-sampling attempt budget even at 14 creatures on a phone-sized
+        // grid. Collisions are still expected eventually — Orbium-Orbium contact has no
+        // special-cased "bounce", it can merge, destroy both, or spawn a stable compound,
+        // entirely as a consequence of the same shared growth field.
+        const minDist = 40;
         for (let i = 0; i < nOrbium; i++) {
           let cx = 0, cy = 0, ok = false;
           for (let attempt = 0; attempt < 30 && !ok; attempt++) {
@@ -559,7 +564,6 @@ void main() {
 
       // ---- one Euler step of the whole grid ---------------------------------------------------
       function simStep() {
-        window.__leniaSteps = (window.__leniaSteps || 0) + 1;
         const dst = 1 - stateIdx;
         gl.viewport(0, 0, gridW, gridH);
         gl.bindFramebuffer(gl.FRAMEBUFFER, simFbo[dst]);
