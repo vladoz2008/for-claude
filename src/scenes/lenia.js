@@ -669,6 +669,7 @@ void main() {
         gl.uniform1f(uStir.uAmp, 0.22);
         gl.uniform1f(uStir.uSeed, seed);
         gl.drawArrays(gl.TRIANGLES, 0, 3);
+        window.__leniaLastFlush = { t: performance.now(), count, pts: Array.from(pts.slice(0, 6)) };
         stateIdx = dst;
         stirQueue = [];
       }
