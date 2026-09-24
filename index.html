@@ -1,0 +1,3496 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Три невозможные вещи</title>
+<meta name="description" content="Три невозможные вещи — «Гаргантюа», «Ления» и «Мандельбульб»: три живые GPU-сцены, вычисленные из математики в реальном времени, без единого изображения и без библиотек.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Oranienbaum&family=Golos+Text:wght@400;500&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>/*
+  «Три невозможные вещи» — shell styling.
+  One deliberate world: a night observatory. All colour comes from tokens
+  on :root; there is no light theme by design (color-scheme: dark).
+*/
+
+:root {
+  color-scheme: dark;
+
+  /* palette */
+  --void: #06070b;                    /* ground / page background */
+  --ink: #e8e4da;                     /* primary text — starlight parchment */
+  --dim: #8b90a4;                     /* secondary text — blue-biased grey */
+  --hair: rgba(232, 228, 218, 0.14);  /* hairline borders / separators */
+  --glass: rgba(8, 9, 14, 0.55);      /* panel backgrounds */
+  --accent: #f2b880;                  /* overwritten at runtime per active scene */
+
+  /* type */
+  --font-display: 'Oranienbaum', 'Didot', 'Bodoni 72', Georgia, serif;
+  --font-body: 'Golos Text', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace;
+
+  /* motion */
+  --veil-ms: 350ms;
+  --fade-ms: 200ms;
+
+  /* safe-area helpers (0 when the host doesn't provide the env) */
+  --sa-top: env(safe-area-inset-top, 0px);
+  --sa-right: env(safe-area-inset-right, 0px);
+  --sa-bottom: env(safe-area-inset-bottom, 0px);
+  --sa-left: env(safe-area-inset-left, 0px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --veil-ms: 0ms;
+    --fade-ms: 0ms;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  background: var(--void);
+}
+
+body {
+  margin: 0;
+  color: var(--ink);
+  font-family: var(--font-body);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+}
+
+/* ---------- stage & transition veil ---------- */
+
+#stage {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  background: var(--void);
+  overflow: hidden;
+}
+
+.veil {
+  position: fixed;
+  inset: 0;
+  z-index: 5;
+  background: var(--void);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--veil-ms) ease;
+}
+
+.veil.is-visible {
+  opacity: 1;
+}
+
+.scene-fallback {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10vh 8vw;
+  text-align: center;
+  font: 500 16px/1.6 var(--font-body);
+  color: var(--dim);
+  background: var(--void);
+}
+
+/* ---------- chrome (all overlay UI) ---------- */
+
+.chrome {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  pointer-events: none;
+  transition: opacity 300ms ease;
+}
+
+.chrome.is-hidden {
+  opacity: 0;
+}
+
+.chrome.is-hidden .ctl,
+.chrome.is-hidden .switch-btn,
+.chrome.is-hidden .info-toggle {
+  pointer-events: none;
+}
+
+.scrim {
+  position: fixed;
+  left: 0;
+  right: 0;
+  height: 22vh;
+  min-height: 140px;
+  pointer-events: none;
+}
+
+.scrim-top {
+  top: 0;
+  background: linear-gradient(to bottom, rgba(6, 7, 11, 0.75), rgba(6, 7, 11, 0));
+}
+
+.scrim-bottom {
+  bottom: 0;
+  background: linear-gradient(to top, rgba(6, 7, 11, 0.75), rgba(6, 7, 11, 0));
+}
+
+/* ---------- shared control style ---------- */
+
+.ctl,
+.info-toggle,
+.ghost-show {
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 16px;
+  border-radius: 999px;
+  border: 1px solid var(--hair);
+  background: var(--glass);
+  backdrop-filter: blur(10px) saturate(1.2);
+  -webkit-backdrop-filter: blur(10px) saturate(1.2);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: border-color 150ms ease, color 150ms ease, background 150ms ease;
+}
+
+@media (min-width: 480px) {
+  .ctl,
+  .info-toggle,
+  .ghost-show {
+    height: 36px;
+    font-size: 12px;
+  }
+}
+
+.ctl:hover,
+.info-toggle:hover,
+.ghost-show:hover {
+  border-color: rgba(232, 228, 218, 0.4);
+}
+
+.ctl[aria-pressed='true'] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.ctl:focus-visible,
+.info-toggle:focus-visible,
+.ghost-show:focus-visible,
+.switch-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--void), 0 0 0 4px var(--accent);
+}
+
+/* ---------- topbar ---------- */
+
+.topbar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 2;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: calc(28px + var(--sa-top)) calc(28px + var(--sa-right)) 0 calc(28px + var(--sa-left));
+  pointer-events: none;
+}
+
+.brand {
+  pointer-events: none;
+  max-width: 62vw;
+}
+
+.brand-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 400;
+  font-size: clamp(26px, 3.6vw, 42px);
+  line-height: 1.05;
+  letter-spacing: 0.01em;
+  color: var(--ink);
+}
+
+.brand-quote {
+  margin: 8px 0 0;
+  max-width: 34ch;
+  color: var(--dim);
+  font-size: 12.5px;
+  line-height: 1.5;
+  text-wrap: balance;
+}
+
+.topbar-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.scene-ui {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.scene-ui:empty {
+  display: none;
+}
+
+/* Coarse pointers (touch) rarely have a working Fullscreen API — iOS Safari
+   has none at all — so don't offer a button that can't do anything there,
+   independent of viewport width (covers touch tablets above the 700px
+   phone breakpoint too). */
+@media (pointer: coarse) {
+  #btn-fullscreen {
+    display: none;
+  }
+}
+
+/* ---------- bottom overlay: info panel + switcher ---------- */
+
+.bottom-overlay {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: row;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 0 calc(28px + var(--sa-right)) calc(24px + var(--sa-bottom)) calc(28px + var(--sa-left));
+  pointer-events: none;
+}
+
+.info-panel {
+  pointer-events: none;
+  max-width: 620px;
+}
+
+.info-header {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.info-index {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.16em;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+
+.info-index::after {
+  content: '';
+  width: 30px;
+  height: 1px;
+  background: var(--accent);
+  opacity: 0.55;
+}
+
+.scene-name {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 400;
+  font-size: clamp(40px, 7vw, 92px);
+  line-height: 0.98;
+  color: var(--ink);
+}
+
+.scene-tagline {
+  margin: 10px 0 0;
+  max-width: 40ch;
+  color: var(--dim);
+  font-size: clamp(13px, 1.3vw, 15px);
+  line-height: 1.5;
+}
+
+.info-toggle {
+  display: none;
+  margin-top: 14px;
+}
+
+.info-details {
+  margin-top: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.scene-about {
+  margin: 0;
+  max-width: 38ch;
+  color: var(--ink);
+  opacity: 0.86;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.scene-spec {
+  margin: 0;
+  display: grid;
+  /* minmax(0, 1fr) lets a long value (e.g. Lenia's world-size description)
+     wrap inside the panel's own width instead of stretching the max-content
+     column past it and pushing the whole grid further into the scene. */
+  grid-template-columns: max-content minmax(0, 1fr);
+  column-gap: 18px;
+  row-gap: 6px;
+  max-width: 38ch;
+  padding-top: 12px;
+  border-top: 1px solid var(--hair);
+}
+
+.scene-spec dt {
+  grid-column: 1;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--dim);
+  white-space: nowrap;
+}
+
+.scene-spec dd {
+  grid-column: 2;
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.scene-hint {
+  margin: 4px 0 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: var(--accent);
+}
+
+/* text crossfade on scene switch */
+.info-fade-target {
+  transition: opacity var(--fade-ms) ease;
+  /* The camera in every scene is user-navigable, so the bright disk/rock/
+     creatures can drift under this text at any orientation — a soft dark
+     halo (not just a narrower column) is what keeps it legible no matter
+     where the scene's brightest pixels end up. */
+  text-shadow: 0 1px 3px rgba(2, 2, 4, 0.75), 0 4px 18px rgba(2, 2, 4, 0.45);
+}
+
+.info-panel.is-fading .info-fade-target {
+  opacity: 0;
+}
+
+/* ---------- scene switcher ---------- */
+
+.switcher {
+  pointer-events: none;
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.switch-btn {
+  pointer-events: auto;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  height: 40px;
+  padding: 0 16px;
+  border-radius: 999px;
+  border: 1px solid var(--hair);
+  background: var(--glass);
+  backdrop-filter: blur(10px) saturate(1.2);
+  -webkit-backdrop-filter: blur(10px) saturate(1.2);
+  cursor: pointer;
+  transition: border-color 150ms ease;
+}
+
+.switch-btn:hover {
+  border-color: rgba(232, 228, 218, 0.4);
+}
+
+.switch-num {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--dim);
+  letter-spacing: 0.04em;
+}
+
+.switch-name {
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+/* Single treatment for the active state, applied consistently at every
+   width: accent border + accent text. No secondary underline — one signal
+   reads faster than two. */
+.switch-btn[aria-current='true'] {
+  border-color: var(--accent);
+}
+
+.switch-btn[aria-current='true'] .switch-num,
+.switch-btn[aria-current='true'] .switch-name {
+  color: var(--accent);
+}
+
+.switch-btn[hidden] {
+  display: none;
+}
+
+/* ---------- hidden-UI ghost button ---------- */
+
+.ghost-show {
+  position: fixed;
+  right: calc(20px + var(--sa-right));
+  bottom: calc(20px + var(--sa-bottom));
+  z-index: 11;
+  opacity: 0.55;
+}
+
+.ghost-show:hover {
+  opacity: 1;
+}
+
+.ghost-show[hidden] {
+  display: none;
+}
+
+/* ==================================================================
+   Narrow / phone layout (< 700px)
+   ================================================================== */
+
+@media (max-width: 700px) {
+  .topbar {
+    padding: calc(18px + var(--sa-top)) 0 0 calc(16px + var(--sa-left));
+    flex-wrap: wrap;
+    row-gap: 10px;
+  }
+
+  .brand {
+    max-width: 100%;
+    padding-right: calc(16px + var(--sa-right));
+  }
+
+  .brand-quote {
+    display: none;
+  }
+
+  /* One horizontally-scrolling row instead of wrapping to a second line —
+     up to 3 scene buttons + Скрыть + Во весь экран never all fit at 390px,
+     but a native swipe reads better here than a tall stacked block. */
+  .topbar-controls {
+    flex-wrap: nowrap;
+    justify-content: flex-start;
+    gap: 6px;
+    width: 100%;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    padding: 0 calc(16px + var(--sa-right)) 4px 0;
+  }
+
+  .topbar-controls::-webkit-scrollbar {
+    display: none;
+  }
+
+  .topbar-controls .ctl {
+    flex: 0 0 auto;
+    height: 30px;
+    padding: 0 10px;
+    font-size: 10px;
+    letter-spacing: 0.05em;
+  }
+
+  /* iOS has no Fullscreen API and coarse pointers rarely need it — free up
+     the scroll row for the controls that matter on a phone. */
+  #btn-fullscreen {
+    display: none;
+  }
+
+  .bottom-overlay {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+    padding: 0 calc(16px + var(--sa-right)) calc(16px + var(--sa-bottom)) calc(16px + var(--sa-left));
+  }
+
+  .info-panel {
+    max-width: none;
+  }
+
+  .info-header {
+    gap: 6px;
+  }
+
+  .scene-name {
+    font-size: clamp(34px, 12vw, 56px);
+  }
+
+  .scene-tagline {
+    max-width: none;
+    margin-top: 6px;
+  }
+
+  .info-toggle {
+    display: inline-flex;
+    margin-top: 10px;
+  }
+
+  .info-details {
+    margin-top: 0;
+    gap: 8px;
+    max-height: 0;
+    opacity: 0;
+    overflow: hidden;
+    transition: max-height 300ms ease, opacity 250ms ease, margin-top 300ms ease;
+  }
+
+  /* Expanded body text can land on a white-hot part of the scene — give it
+     a glass card so it stays legible regardless of what's behind it. */
+  .info-panel.is-expanded {
+    background: var(--glass);
+    backdrop-filter: blur(16px) saturate(1.3);
+    -webkit-backdrop-filter: blur(16px) saturate(1.3);
+    border: 1px solid var(--hair);
+    border-radius: 16px;
+    padding: 16px;
+  }
+
+  .info-panel.is-expanded .info-details {
+    margin-top: 10px;
+    max-height: 30vh;
+    opacity: 1;
+    overflow-y: auto;
+  }
+
+  .scene-about,
+  .scene-spec {
+    max-width: none;
+  }
+
+  .scene-about {
+    font-size: 13px;
+    line-height: 1.5;
+  }
+
+  .scene-spec {
+    row-gap: 4px;
+    padding-top: 8px;
+  }
+
+  .scene-hint {
+    margin-top: 2px;
+    font-size: 10.5px;
+  }
+
+  /* Three equal columns, names instead of numerals — a numeral-only pill
+     reads fine as a index but loses the scene name entirely, which matters
+     more here than the roman-numeral conceit does. */
+  .switcher {
+    justify-content: stretch;
+    gap: 6px;
+  }
+
+  .switch-btn {
+    flex: 1 1 0;
+    height: 40px;
+    justify-content: center;
+    /* .switch-num is hidden below, leaving .switch-name as the sole flex
+       item — baseline alignment (the desktop default, which lines up the
+       numeral and name nicely) then has nothing to align against and
+       floats the text toward the top of the pill. Re-center it. */
+    align-items: center;
+    padding: 0 4px;
+  }
+
+  .switch-num {
+    display: none;
+  }
+
+  .switch-name {
+    font-size: 12.5px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}
+
+@media (max-width: 360px) {
+  .switch-name {
+    font-size: 11px;
+  }
+
+  .switch-btn {
+    padding: 0 2px;
+  }
+}
+</style>
+</head>
+<body>
+<div id="stage"></div>
+<div id="veil" class="veil" aria-hidden="true"></div>
+<div id="chrome" class="chrome">
+  <div class="scrim scrim-top" aria-hidden="true"></div>
+  <div class="scrim scrim-bottom" aria-hidden="true"></div>
+
+  <header class="topbar">
+    <div class="brand">
+      <h1 class="brand-title">Три невозможные вещи</h1>
+      <p class="brand-quote">«Иногда я успевала поверить в шесть невозможных вещей ещё до завтрака» — Белая Королева</p>
+    </div>
+    <div class="topbar-controls">
+      <div id="scene-ui" class="scene-ui"></div>
+      <button type="button" id="btn-hide" class="ctl" aria-pressed="false">Скрыть</button>
+      <button type="button" id="btn-fullscreen" class="ctl" aria-pressed="false">Во весь экран</button>
+    </div>
+  </header>
+
+  <div class="bottom-overlay">
+    <section class="info-panel" id="info-panel">
+      <div class="info-header">
+        <span class="info-index info-fade-target" id="scene-index">I</span>
+        <h2 class="scene-name info-fade-target" id="scene-name">Гаргантюа</h2>
+      </div>
+      <p class="scene-tagline info-fade-target" id="scene-tagline"></p>
+      <button type="button" class="info-toggle" id="info-toggle" aria-expanded="false" aria-controls="info-details">Подробнее</button>
+      <div class="info-details" id="info-details">
+        <p class="scene-about info-fade-target" id="scene-about"></p>
+        <dl class="scene-spec info-fade-target" id="scene-spec"></dl>
+        <p class="scene-hint info-fade-target" id="scene-hint"></p>
+      </div>
+    </section>
+
+    <nav class="switcher" id="switcher" aria-label="Выбор сцены">
+      <button type="button" class="switch-btn" data-scene="gargantua" aria-current="true">
+        <span class="switch-num">I</span><span class="switch-name">Гаргантюа</span>
+      </button>
+      <button type="button" class="switch-btn" data-scene="lenia" aria-current="false">
+        <span class="switch-num">II</span><span class="switch-name">Ления</span>
+      </button>
+      <button type="button" class="switch-btn" data-scene="mandelbulb" aria-current="false">
+        <span class="switch-num">III</span><span class="switch-name">Мандельбульб</span>
+      </button>
+    </nav>
+  </div>
+</div>
+
+<button type="button" id="btn-show" class="ghost-show" hidden>Показать интерфейс</button>
+<script>
+/* сцена: gargantua */
+(function () {
+  'use strict';
+  const SCENES = (window.SCENES = window.SCENES || {});
+
+  // ===========================================================================================
+  // Гаргантюа — real-time Schwarzschild black hole ray tracer.
+  //
+  // Physics summary (see comments inline for the exact formulas used):
+  //  - Units: Schwarzschild radius r_s = 1, black hole at the origin.
+  //  - Photons are traced BACKWARDS from the camera through flat 3D space, but bent by the
+  //    "fake curvature" acceleration a = -1.5 h^2 x / |x|^5, h = |x x v| (angular momentum,
+  //    conserved). This is the well known cheap-but-exact trick that reproduces the Schwarzschild
+  //    null-geodesic orbit equation d^2u/dphi^2 + u = 1.5 r_s u^2 (u = 1/r) without touching a
+  //    metric tensor: it gives the correct photon sphere at r = 1.5 r_s and shadow at ~2.6 r_s.
+  //  - The thin accretion disk (y = 0 plane) is sampled every time the ray crosses the plane;
+  //    because bent rays cross the plane more than once, the far side of the disk reappears
+  //    arched over and under the shadow, plus a thin photon ring - all for free from the geometry.
+  // ===========================================================================================
+
+  // ---------------------------------------------------------------------------------------------
+  // Shader sources
+  // ---------------------------------------------------------------------------------------------
+
+  // Full-screen triangle, no vertex buffers needed (uses gl_VertexID).
+  const VERT_SRC = `#version 300 es
+    const vec2 POS[3] = vec2[3](vec2(-1.0, -1.0), vec2(3.0, -1.0), vec2(-1.0, 3.0));
+    out vec2 vUv;
+    void main() {
+      vec2 p = POS[gl_VertexID];
+      vUv = p * 0.5 + 0.5;
+      gl_Position = vec4(p, 0.0, 1.0);
+    }
+  `;
+
+  const RAYTRACE_FRAG = `#version 300 es
+    precision highp float;
+    in vec2 vUv;
+    out vec4 outColor;
+
+    uniform vec2 u_resolution;
+    uniform vec3 u_camPos;
+    uniform vec3 u_camRight;
+    uniform vec3 u_camUp;
+    uniform vec3 u_camForward;
+    uniform float u_tanHalfFov;
+    uniform float u_aspect;
+    uniform float u_diskTime;   // wall-clock time for disk turbulence, frozen while paused
+    uniform float u_doppler;    // 1.0 = relativistic shading on, 0.0 = off (comparison toggle)
+    uniform int u_maxSteps;     // adaptive step budget (quality-scaled)
+    uniform float u_pixelAngle; // angular footprint of one output pixel (radians) - used to size
+                                 // stars as true pinpoints regardless of render resolution
+
+    // ---- physical constants (r_s = 1) --------------------------------------------------------
+    const float DISK_INNER = 3.0;    // ISCO for Schwarzschild: r = 3 r_s
+    const float DISK_OUTER = 13.0;
+    const float T0 = 9200.0;         // reference temperature scale for the blackbody map (K):
+                                      // tuned so the disk spans white-hot / pale-yellow inner gas
+                                      // to deep orange/amber at the outer edge, like the real
+                                      // T(r) profile (peak near the inner edge, r^-0.75 falloff).
+    const float BASE_BRIGHT = 1.5;
+    const float OMEGA0 = 1.15;       // Keplerian angular-speed constant: omega(r) = OMEGA0 * r^-1.5
+    const int MAX_STEPS_CONST = 225; // hard cap the compiler can prove termination on
+
+    // ---- small hash / noise toolbox ----------------------------------------------------------
+    float hash21(vec2 p) {
+      p = fract(p * vec2(123.34, 456.21));
+      p += dot(p, p + 45.32);
+      return fract(p.x * p.y);
+    }
+    float hash31(vec3 p) {
+      p = fract(p * 0.3183099 + vec3(0.1, 0.2, 0.3));
+      p *= 17.0;
+      return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
+    }
+    float noise2(vec2 p) {
+      vec2 i = floor(p), f = fract(p);
+      float a = hash21(i), b = hash21(i + vec2(1.0, 0.0));
+      float c = hash21(i + vec2(0.0, 1.0)), d = hash21(i + vec2(1.0, 1.0));
+      vec2 u = f * f * (3.0 - 2.0 * f);
+      return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+    }
+    float fbm2(vec2 p, int octaves) {
+      float v = 0.0, amp = 0.55;
+      for (int i = 0; i < 6; i++) {
+        if (i >= octaves) break;
+        v += amp * noise2(p);
+        p = p * 2.03 + 11.0;
+        amp *= 0.55;
+      }
+      return v;
+    }
+    // 3D value noise (trilinear) - used for the disk turbulence so it can be sampled in plain
+    // Cartesian coordinates (rotated into a co-rotating frame) instead of raw polar angle, which
+    // has a hard seam at phi = +-pi that shows up as a sharp line through the disk.
+    float noise3(vec3 p) {
+      vec3 i = floor(p), f = fract(p);
+      f = f * f * (3.0 - 2.0 * f);
+      float n000 = hash31(i + vec3(0.0, 0.0, 0.0)), n100 = hash31(i + vec3(1.0, 0.0, 0.0));
+      float n010 = hash31(i + vec3(0.0, 1.0, 0.0)), n110 = hash31(i + vec3(1.0, 1.0, 0.0));
+      float n001 = hash31(i + vec3(0.0, 0.0, 1.0)), n101 = hash31(i + vec3(1.0, 0.0, 1.0));
+      float n011 = hash31(i + vec3(0.0, 1.0, 1.0)), n111 = hash31(i + vec3(1.0, 1.0, 1.0));
+      float nx00 = mix(n000, n100, f.x), nx10 = mix(n010, n110, f.x);
+      float nx01 = mix(n001, n101, f.x), nx11 = mix(n011, n111, f.x);
+      return mix(mix(nx00, nx10, f.y), mix(nx01, nx11, f.y), f.z);
+    }
+    float fbm3(vec3 p, int octaves) {
+      float v = 0.0, amp = 0.55;
+      for (int i = 0; i < 6; i++) {
+        if (i >= octaves) break;
+        v += amp * noise3(p);
+        p = p * 2.05 + 7.0;
+        amp *= 0.55;
+      }
+      return v;
+    }
+
+    // ---- Tanner Helland blackbody approximation (input Kelvin -> linear-ish RGB in [0,1]) ----
+    vec3 blackbody(float tempK) {
+      float t = clamp(tempK, 1000.0, 40000.0) / 100.0;
+      float r, g, b;
+      r = t <= 66.0 ? 255.0 : 329.698727446 * pow(t - 60.0, -0.1332047592);
+      g = t <= 66.0
+        ? 99.4708025861 * log(t) - 161.1195681661
+        : 288.1221695283 * pow(t - 60.0, -0.0755148492);
+      b = t >= 66.0 ? 255.0 : (t <= 19.0 ? 0.0 : 138.5177312231 * log(t - 10.0) - 305.0447927307);
+      return clamp(vec3(r, g, b) / 255.0, 0.0, 1.0);
+    }
+
+    // ---- geodesic acceleration: a = -1.5 h^2 x / |x|^5 ----------------------------------------
+    vec3 accel(vec3 x, float h2) {
+      float r2 = dot(x, x);
+      return (-1.5 * h2) * x / (r2 * r2 * sqrt(r2));
+    }
+
+    // classic RK4 step of the coupled system dx/dl = v, dv/dl = accel(x)
+    void rk4Step(inout vec3 x, inout vec3 v, float h2, float dt) {
+      vec3 k1x = v,                    k1v = accel(x, h2);
+      vec3 k2x = v + 0.5 * dt * k1v,   k2v = accel(x + 0.5 * dt * k1x, h2);
+      vec3 k3x = v + 0.5 * dt * k2v,   k3v = accel(x + 0.5 * dt * k2x, h2);
+      vec3 k4x = v + dt * k3v,         k4v = accel(x + dt * k3x, h2);
+      x += (dt / 6.0) * (k1x + 2.0 * k2x + 2.0 * k3x + k4x);
+      v += (dt / 6.0) * (k1v + 2.0 * k2v + 2.0 * k3v + k4v);
+    }
+
+    // ---- accretion disk shading at one plane-crossing point -----------------------------------
+    // p: crossing point (y ~ 0). marchDir: the ray's local tangent as WE traced it (camera -> out).
+    vec4 diskShade(vec3 p, vec3 marchDir, float rDisk) {
+      float edgeFade = smoothstep(DISK_INNER, DISK_INNER + 0.45, rDisk)
+                      * smoothstep(DISK_OUTER, DISK_OUTER - 2.2, rDisk);
+      if (edgeFade <= 0.002) return vec4(0.0);
+
+      // Procedural turbulence, sampled anisotropically so it reads as sheared gas filaments
+      // rather than an isotropic cellular/caustic net. phi' = phi - omega(r)*t is the azimuth in
+      // a co-rotating frame (differential Keplerian shear - inner radii rotate faster - makes the
+      // static noise field appear to spiral as u_diskTime advances). Embedding phi' as
+      // (cos phi', sin phi') keeps the circle seamless (no branch-cut jump at phi = +-pi, unlike
+      // sampling the raw angle), while a HIGH frequency along log(r) and a LOW frequency around
+      // the circle stretches every noise feature into a long, thin azimuthal arc.
+      float phi = atan(p.z, p.x);
+      float omega = OMEGA0 * pow(rDisk, -1.5);
+      float phiPrime = phi - omega * u_diskTime;
+      float lr = log(rDisk);
+      const float RADIAL_FREQ = 13.0;  // cells per unit log(r) - fine radial detail
+      const float ANGULAR_FREQ = 3.0;  // cells around the full circle - long azimuthal streaks
+      vec3 sp = vec3(lr * RADIAL_FREQ, cos(phiPrime) * ANGULAR_FREQ, sin(phiPrime) * ANGULAR_FREQ);
+      // Broad layer gives overall coverage/shape; a ridged (folded) detail layer - same
+      // anisotropic streak shape, finer scale - turns it into thin bright filaments rather than
+      // soft blotches, matching sheared turbulent gas rather than clouds or cellular foam.
+      float base = fbm3(sp * 0.4, 3);
+      float detail = fbm3(sp * 0.9 + 23.0, 3);
+      float ridged = pow(1.0 - abs(detail * 2.0 - 1.0), 2.0);
+      float density = clamp(0.18 + 0.42 * base + 0.55 * ridged, 0.0, 1.0) * edgeFade;
+
+      // Shakura-Sunyaev / Novikov-Thorne style temperature profile with zero-torque inner edge.
+      float x = DISK_INNER / rDisk;
+      float T = T0 * pow(rDisk / DISK_INNER, -0.75) * pow(max(0.0, 1.0 - sqrt(x)), 0.25);
+      // Push the inner disk hotter (white/pale-yellow) and let it fall off harder into the deep
+      // orange/amber outer disk, and make the inner edge noticeably more opaque/bright so the
+      // near limb reads as a solid bright band rather than a thin translucent haze.
+      float innerT = smoothstep(DISK_OUTER * 0.55, DISK_INNER, rDisk);
+      float radialBoost = mix(0.55, 2.0, innerT);
+      float opacityBoost = mix(0.5, 1.0, innerT);
+
+      float g = 1.0;
+      if (u_doppler > 0.5) {
+        // Orbital speed of Keplerian gas (beta = 0.5 c at the ISCO by construction).
+        float beta = sqrt(0.5 / max(rDisk - 1.0, 0.05));
+        float gamma = 1.0 / sqrt(max(1.0 - beta * beta, 1e-4));
+        vec3 velDir = normalize(vec3(p.z, 0.0, -p.x));   // tangential orbital direction
+        vec3 n = normalize(-marchDir);                    // photon prop. dir, source -> observer
+        float cosTheta = dot(velDir, n);
+        float dopplerFac = 1.0 / (gamma * (1.0 - beta * cosTheta));
+        float gravRedshift = sqrt(max(0.0, 1.0 - 1.0 / rDisk));
+        g = dopplerFac * gravRedshift;
+      }
+
+      vec3 col = blackbody(T * g);
+      // The raw blackbody curve desaturates fast toward white - push it a little further from
+      // grey so the hot-white / cool-orange contrast across the disk actually reads on screen.
+      float lum = dot(col, vec3(0.299, 0.587, 0.114));
+      col = clamp(lum + (col - lum) * 1.5, 0.0, 4.0);
+      // Relativistic beaming: I_obs ~ g^3 I_emit (the monochromatic-intensity exponent rather
+      // than g^4) - g^4 pushed the approaching side into a flat blown-out white blob with no
+      // visible streak texture; g^3 keeps it clearly the brightest/bluest side while the
+      // turbulence detail still reads through it.
+      float intensity = pow(max(g, 0.0001), 3.0);
+      vec3 emit = col * intensity * BASE_BRIGHT * radialBoost * density;
+      float alpha = clamp(density * 0.72 * opacityBoost, 0.0, 1.0);
+      return vec4(emit, alpha);
+    }
+
+    // ---- procedural sky: stars (true 3D cell hash, smooth Gaussian discs) + a faint band -------
+    // A single cube face's grid is a GNOMONIC projection: cells stay roughly square only near
+    // each face's centre and stretch severely near its edges/corners. Searching that grid's 3x3
+    // neighbourhood in uv-space does not correspond to a uniform angular search everywhere - near
+    // a face edge a star whose true position is angularly close to a pixel can sit in a uv-cell
+    // outside that pixel's 3x3 window (or vice-versa), so only PART of the star's footprint gets
+    // evaluated by neighbouring pixels: a clipped sliver/dash instead of a full round point. Using
+    // a genuine 3D lattice directly on the direction vector (floor(dir * density)) has no such
+    // single-axis blow-up, and a full 3x3x3 = 27-cell search (cheap - this runs once per escaped
+    // ray, not per step) comfortably covers every star whose footprint could reach this pixel.
+    vec3 starLayer(vec3 dir, float density, float thresh) {
+      vec3 p = dir * density;
+      vec3 cellF = floor(p);
+      vec3 acc = vec3(0.0);
+      for (int oz = -1; oz <= 1; oz++) {
+        for (int oy = -1; oy <= 1; oy++) {
+          for (int ox = -1; ox <= 1; ox++) {
+            vec3 c = cellF + vec3(float(ox), float(oy), float(oz));
+            float h = hash31(c);
+            if (h > thresh) {
+              float hBright = hash31(c + vec3(7.0, 3.0, 41.0));   // brightness seed
+              float hTemp = hash31(c + vec3(13.0, 29.0, 5.0));    // colour-temperature seed
+              vec3 jitter = vec3(
+                hash31(c + vec3(17.0, 2.0, 9.0)),
+                hash31(c + vec3(23.0, 4.0, 31.0)),
+                hash31(c + vec3(41.0, 6.0, 53.0))
+              );
+              vec3 starDir = normalize(c + jitter);
+              // Chord (Euclidean) distance, not cos(angle): for the tiny sub-degree angles a
+              // pinpoint star spans, 1-cos(angle) ~= angle^2/2, which throws away almost all
+              // precision in a 32-bit float. Chord distance stays ~= angle and well conditioned.
+              float d = length(dir - starDir);
+              // Never let a star shrink below ~0.7 pixels - smaller than that and single-sample
+              // (no supersampling) rendering aliases it into a jagged sliver depending on exactly
+              // where its centre falls relative to the pixel grid.
+              float desiredRad = u_pixelAngle * mix(0.7, 1.6, pow(hBright, 3.0));
+              float angRad = max(desiredRad, u_pixelAngle * 1.0);
+              // A Gaussian (rather than a hard-edged smoothstep disc) falls off gracefully at
+              // sub-pixel scale instead of aliasing into a jagged or lopsided shape.
+              float shape = exp(-(d * d) / (2.0 * angRad * angRad));
+              // Real star fields are dominated by faint stars with only a rare few standing out -
+              // a steep power keeps most pinpoints dim. Kept below the bloom threshold so stars
+              // stay crisp instead of blooming into soft blobs.
+              float brightness = mix(0.05, 0.32, pow(hBright, 4.5));
+              vec3 tint = mix(vec3(0.72, 0.80, 1.0), vec3(1.0, 0.86, 0.68), hTemp);
+              acc += shape * brightness * tint;
+            }
+          }
+        }
+      }
+      return acc;
+    }
+
+    vec3 sky(vec3 dir) {
+      // Space is essentially black - the disk must be the only large light source in frame.
+      vec3 col = vec3(0.0015, 0.0016, 0.0035);
+
+      // A very faint Milky-Way-like band around a fixed tilted great circle: its peak luminance
+      // is kept to a small fraction of the disk's so it never competes with it.
+      vec3 galN = normalize(vec3(0.25, 0.92, -0.30));
+      float bandDist = dot(dir, galN);
+      float band = exp(-bandDist * bandDist * 16.0);
+      float bandNoise = fbm2(vec2(dir.x * 3.0 + dir.z * 2.0, dir.y * 5.0) * 2.2, 3) * 0.5 + 0.5;
+      col += band * bandNoise * vec3(0.045, 0.04, 0.045) * 0.4;
+
+      col += starLayer(dir, 35.0, 0.92);
+      col += starLayer(dir, 70.0, 0.95);
+      return col;
+    }
+
+    void main() {
+      vec2 uv = (gl_FragCoord.xy / u_resolution) * 2.0 - 1.0;
+      uv.x *= u_aspect;
+      vec3 rd = normalize(uv.x * u_tanHalfFov * u_camRight
+                         + uv.y * u_tanHalfFov * u_camUp
+                         + u_camForward);
+
+      vec3 pos = u_camPos;
+      vec3 vel = rd;
+      float h2 = dot(cross(pos, vel), cross(pos, vel));
+
+      // Impact parameter b = sqrt(h2) (exact for the initial unit-speed ray): the perpendicular
+      // distance from the hole to the ray's straight line. Since the disk's outer edge is at
+      // r = 13, ANY ray that actually crosses the disk has b <= 13 (b is by definition the
+      // closest approach of the line to the origin, so it can only be <= the distance to any
+      // point on that line, including the crossing point). So b > 20 rays can never touch the
+      // disk and bend by a genuinely negligible amount - go straight to the sky with the exact
+      // pixel direction. This is not just a performance shortcut: doing the full RK4 walk here
+      // anyway (bending or not) accumulates tiny per-step floating-point drift in vel that,
+      // while physically insignificant, is comparable to a sub-pixel star's own angular size and
+      // visibly jitters it into a streak - using the exact, undrifted rd keeps stars crisp and
+      // round for the ~95% of the sky that is far from the hole.
+      if (h2 > 400.0) {
+        vec4 s = vec4(0.0);
+        if (abs(rd.y) > 1e-6) {
+          float t = -pos.y / rd.y;
+          if (t > 0.0) {
+            vec3 hitP = pos + t * rd;
+            float rDisk = length(hitP.xz);
+            if (rDisk > DISK_INNER && rDisk < DISK_OUTER) s = diskShade(hitP, rd, rDisk);
+          }
+        }
+        outColor = vec4(s.rgb + (1.0 - s.a) * sky(rd), 1.0);
+        return;
+      }
+
+      vec3 colorAccum = vec3(0.0);
+      float alphaAccum = 0.0;
+      bool captured = false;
+      bool escaped = false;
+      const float FAR = 80.0; // escape radius - well past the disk (13) and photon sphere (1.5)
+
+      for (int i = 0; i < MAX_STEPS_CONST; i++) {
+        if (i >= u_maxSteps) break;
+        if (alphaAccum > 0.995) break;
+
+        float r = length(pos);
+        if (r < 1.0) { captured = true; break; }
+        if (r > FAR && dot(pos, vel) > 0.0) { escaped = true; break; }
+
+        // Adaptive step: small near the hole and disk (where curvature is strong and the disk
+        // crossing point needs sub-pixel precision), then AGGRESSIVELY large once a ray is both
+        // clear of that zone (r > 16, over 10x the photon sphere) AND actually moving outward -
+        // dot(pos, vel) > 0 is essential here: a ray can easily start at r > 16 while still
+        // heading INWARD toward its closest approach (this is exactly the case for a ray that
+        // ends up bent over the shadow into a lensed image of the disk's far side). Speeding up
+        // by r alone, regardless of direction, let such a ray take one huge first step and blow
+        // straight through the entire near-hole region it was supposed to curve around, which
+        // silently deleted the lensed arc. Once a ray IS moving outward past r = 16, though,
+        // curvature is negligible and it can safely cross r=16..FAR in one or two steps instead
+        // of several - which also matters for more than performance: each RK4 step accumulates a
+        // little floating-point rounding in the direction vector, and several steps' worth of
+        // that, while physically insignificant, was large enough to visibly jitter sub-pixel
+        // background stars into streaks. Fewer steps means less drift and a genuinely round
+        // point, and it also removes the faint concentric ring banding that per-pixel
+        // differences in step count used to leave in the sky once escaped.
+        bool movingOut = dot(pos, vel) > 0.0;
+        float dt = (r > 16.0 && movingOut) ? clamp(r * 3.0, 6.0, 200.0) : clamp(r * 0.14, 0.012, 1.3);
+
+        vec3 prevPos = pos;
+        rk4Step(pos, vel, h2, dt);
+
+        // Detect a crossing of the disk plane y = 0 and interpolate the exact crossing point.
+        if (prevPos.y * pos.y < 0.0) {
+          float t = prevPos.y / (prevPos.y - pos.y);
+          vec3 hitP = mix(prevPos, pos, t);
+          float rDisk = length(hitP.xz);
+          if (rDisk > DISK_INNER && rDisk < DISK_OUTER) {
+            vec3 marchDir = normalize(pos - prevPos);
+            vec4 s = diskShade(hitP, marchDir, rDisk);
+            colorAccum += (1.0 - alphaAccum) * s.rgb * s.a;
+            alphaAccum += (1.0 - alphaAccum) * s.a;
+          }
+        }
+      }
+
+      // A ray that neither escaped nor was captured only happens for near-critical impact
+      // parameters that spend the whole step budget winding around the photon sphere. If it is
+      // still deep in the strong field (r < 3) it is visually indistinguishable from a captured
+      // ray, so treat it as one (black) rather than sampling the sky with whatever direction the
+      // integration happened to stop at - that stray "special colour" is what produced a sharp,
+      // unphysical ring artifact around the shadow.
+      vec3 finalColor = colorAccum;
+      if (escaped) {
+        finalColor += (1.0 - alphaAccum) * sky(normalize(vel));
+      } else if (!captured && length(pos) >= 3.0) {
+        finalColor += (1.0 - alphaAccum) * sky(normalize(vel));
+      }
+      outColor = vec4(finalColor, 1.0);
+    }
+  `;
+
+  const DOWNSAMPLE_FRAG = `#version 300 es
+    precision highp float;
+    in vec2 vUv;
+    uniform sampler2D u_tex;
+    uniform vec2 u_texel;
+    out vec4 outColor;
+    void main() {
+      // Proper 4x4 box filter for the 4x downsample - a sparse 2x2 sample (as before) badly
+      // undersamples a small bright feature like a 1px star: depending on exact alignment it
+      // gets caught by one destination texel but missed by its neighbour, and the asymmetric
+      // "who caught the light" pattern survives the later separable blur as a diagonal streak
+      // instead of a round glow. Covering the full source block removes that aliasing.
+      vec3 c = vec3(0.0);
+      for (int j = 0; j < 4; j++) {
+        for (int i = 0; i < 4; i++) {
+          vec2 off = vec2(float(i) - 1.5, float(j) - 1.5);
+          c += texture(u_tex, vUv + u_texel * off).rgb;
+        }
+      }
+      c *= (1.0 / 16.0);
+      float lum = dot(c, vec3(0.2126, 0.7152, 0.0722));
+      float thresh = 0.4;
+      vec3 bright = c * smoothstep(thresh, thresh * 2.2, lum);
+      outColor = vec4(bright, 1.0);
+    }
+  `;
+
+  const BLUR_FRAG = `#version 300 es
+    precision highp float;
+    in vec2 vUv;
+    uniform sampler2D u_tex;
+    uniform vec2 u_dir; // texel-scaled blur direction
+    out vec4 outColor;
+    void main() {
+      const float w0 = 0.2270270270;
+      const float w1 = 0.1945945946;
+      const float w2 = 0.1216216216;
+      const float w3 = 0.0540540541;
+      const float w4 = 0.0162162162;
+      vec3 sum = texture(u_tex, vUv).rgb * w0;
+      sum += (texture(u_tex, vUv + u_dir * 1.0).rgb + texture(u_tex, vUv - u_dir * 1.0).rgb) * w1;
+      sum += (texture(u_tex, vUv + u_dir * 2.0).rgb + texture(u_tex, vUv - u_dir * 2.0).rgb) * w2;
+      sum += (texture(u_tex, vUv + u_dir * 3.0).rgb + texture(u_tex, vUv - u_dir * 3.0).rgb) * w3;
+      sum += (texture(u_tex, vUv + u_dir * 4.0).rgb + texture(u_tex, vUv - u_dir * 4.0).rgb) * w4;
+      outColor = vec4(sum, 1.0);
+    }
+  `;
+
+  const COMPOSITE_FRAG = `#version 300 es
+    precision highp float;
+    in vec2 vUv;
+    uniform sampler2D u_hdr;
+    uniform sampler2D u_bloom;
+    out vec4 outColor;
+
+    vec3 acesFilm(vec3 x) {
+      float a = 2.51, b = 0.03, c = 2.43, d = 0.59, e = 0.14;
+      return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
+    }
+
+    void main() {
+      vec3 hdr = texture(u_hdr, vUv).rgb;
+      vec3 bloom = texture(u_bloom, vUv).rgb;
+      vec3 col = hdr + bloom * 0.9;
+      col = acesFilm(col);
+      col = pow(col, vec3(1.0 / 2.2));
+      vec2 p = vUv * 2.0 - 1.0;
+      float vig = 1.0 - dot(p, p) * 0.25;
+      col *= clamp(vig, 0.0, 1.0);
+      outColor = vec4(col, 1.0);
+    }
+  `;
+
+  // ---------------------------------------------------------------------------------------------
+  // GL helpers
+  // ---------------------------------------------------------------------------------------------
+
+  function compileShader(gl, type, src) {
+    const sh = gl.createShader(type);
+    gl.shaderSource(sh, src);
+    gl.compileShader(sh);
+    if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
+      console.error('gargantua shader compile error:', gl.getShaderInfoLog(sh));
+      gl.deleteShader(sh);
+      return null;
+    }
+    return sh;
+  }
+
+  function linkProgram(gl, vsSrc, fsSrc) {
+    const vs = compileShader(gl, gl.VERTEX_SHADER, vsSrc);
+    const fs = compileShader(gl, gl.FRAGMENT_SHADER, fsSrc);
+    if (!vs || !fs) return null;
+    const prog = gl.createProgram();
+    gl.attachShader(prog, vs);
+    gl.attachShader(prog, fs);
+    gl.linkProgram(prog);
+    gl.deleteShader(vs);
+    gl.deleteShader(fs);
+    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+      console.error('gargantua program link error:', gl.getProgramInfoLog(prog));
+      gl.deleteProgram(prog);
+      return null;
+    }
+    return prog;
+  }
+
+  function uniformLocs(gl, prog, names) {
+    const u = {};
+    for (const n of names) u[n] = gl.getUniformLocation(prog, n);
+    return u;
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // Scene registration
+  // ---------------------------------------------------------------------------------------------
+
+  SCENES.gargantua = {
+    id: 'gargantua',
+    name: 'Гаргантюа',
+    tagline: 'Чёрная дыра Шварцшильда: каждый пиксель — луч света, изогнутый гравитацией',
+    about: 'Свет вблизи горизонта движется по изогнутым геодезическим, поэтому дальняя сторона ' +
+      'аккреционного диска видна выгнутой над и под тенью — это и есть гравитационное линзирование ' +
+      'в чистом виде. Газ у внутреннего края диска обращается почти со скоростью света, и сторона, ' +
+      'летящая навстречу наблюдателю, выглядит ярче и голубее — релятивистский эффект Доплера.',
+    spec: [
+      ['Метрика', 'Шварцшильд, rₛ = 1'],
+      ['Тень чёрной дыры', '≈ 2,6 rₛ'],
+      ['Фотонная сфера', 'r = 1,5 rₛ'],
+      ['Край диска (ISCO)', 'r = 3 rₛ'],
+      ['Интегратор', 'RK4, до 220 шагов'],
+      ['Скорость газа на ISCO', '0,5 c'],
+    ],
+    hint: 'Тяните — облёт · колесо или щипок — зум',
+    accent: '#F2B880',
+
+    mount(host, ui) {
+      const canvas = document.createElement('canvas');
+      canvas.style.display = 'block';
+      canvas.style.width = '100%';
+      canvas.style.height = '100%';
+      canvas.style.touchAction = 'none';
+      host.appendChild(canvas);
+
+      const gl = canvas.getContext('webgl2', { alpha: false, antialias: false, powerPreference: 'high-performance' });
+      if (!gl) {
+        const fb = document.createElement('div');
+        fb.className = 'scene-fallback';
+        fb.textContent = 'Для этой сцены нужен WebGL2 — откройте страницу в свежем Chrome, Firefox или Safari.';
+        host.appendChild(fb);
+        return { unmount() { host.innerHTML = ''; ui.innerHTML = ''; } };
+      }
+
+      const floatExt = gl.getExtension('EXT_color_buffer_float');
+      const useFloat = !!floatExt;
+
+      // ---- programs -----------------------------------------------------------------------
+      const rayProg = linkProgram(gl, VERT_SRC, RAYTRACE_FRAG);
+      const downProg = linkProgram(gl, VERT_SRC, DOWNSAMPLE_FRAG);
+      const blurProg = linkProgram(gl, VERT_SRC, BLUR_FRAG);
+      const compProg = linkProgram(gl, VERT_SRC, COMPOSITE_FRAG);
+
+      const rayU = uniformLocs(gl, rayProg, [
+        'u_resolution', 'u_camPos', 'u_camRight', 'u_camUp', 'u_camForward',
+        'u_tanHalfFov', 'u_aspect', 'u_diskTime', 'u_doppler', 'u_maxSteps', 'u_pixelAngle',
+      ]);
+      const downU = uniformLocs(gl, downProg, ['u_tex', 'u_texel']);
+      const blurU = uniformLocs(gl, blurProg, ['u_tex', 'u_dir']);
+      const compU = uniformLocs(gl, compProg, ['u_hdr', 'u_bloom']);
+
+      // Empty VAO: the full-screen triangle is generated purely from gl_VertexID.
+      const vao = gl.createVertexArray();
+      gl.bindVertexArray(vao);
+
+      // ---- render targets (recreated on resize) --------------------------------------------
+      const internalFmt = useFloat ? gl.RGBA16F : gl.RGBA8;
+      const texType = useFloat ? gl.HALF_FLOAT : gl.UNSIGNED_BYTE;
+
+      let hdrTex = null, hdrFbo = null;
+      let bloomTexA = null, bloomFboA = null;
+      let bloomTexB = null, bloomFboB = null;
+      let fullW = 0, fullH = 0, smallW = 0, smallH = 0;
+
+      function makeTex(w, h) {
+        const t = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, t);
+        gl.texImage2D(gl.TEXTURE_2D, 0, internalFmt, w, h, 0, gl.RGBA, texType, null);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        return t;
+      }
+      function makeFbo(tex) {
+        const f = gl.createFramebuffer();
+        gl.bindFramebuffer(gl.FRAMEBUFFER, f);
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
+        return f;
+      }
+      function deleteTargets() {
+        for (const t of [hdrTex, bloomTexA, bloomTexB]) if (t) gl.deleteTexture(t);
+        for (const f of [hdrFbo, bloomFboA, bloomFboB]) if (f) gl.deleteFramebuffer(f);
+        hdrTex = hdrFbo = bloomTexA = bloomFboA = bloomTexB = bloomFboB = null;
+      }
+      function buildTargets(w, h) {
+        deleteTargets();
+        fullW = Math.max(1, w);
+        fullH = Math.max(1, h);
+        smallW = Math.max(1, Math.round(fullW / 4));
+        smallH = Math.max(1, Math.round(fullH / 4));
+        hdrTex = makeTex(fullW, fullH);
+        hdrFbo = makeFbo(hdrTex);
+        bloomTexA = makeTex(smallW, smallH);
+        bloomFboA = makeFbo(bloomTexA);
+        bloomTexB = makeTex(smallW, smallH);
+        bloomFboB = makeFbo(bloomTexB);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      }
+
+      // ---- camera state ----------------------------------------------------------------------
+      const DEFAULT_DIST = 20;
+      const DEFAULT_YAW = 0.15;
+      const DEFAULT_PITCH = 0.14; // ~8 degrees above the disk plane
+      let yaw = DEFAULT_YAW;
+      let pitch = DEFAULT_PITCH;
+      let dist = DEFAULT_DIST;
+      let yawVel = 0, pitchVel = 0; // drag inertia
+      const FOV_DEG = 50;
+
+      // ---- interaction state -----------------------------------------------------------------
+      const pointers = new Map(); // pointerId -> {x,y}
+      let dragLast = null;        // {x,y} of the single-pointer drag
+      let pinchStartDist = 0, pinchStartZoom = 0;
+      let lastInteraction = performance.now();
+      const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+      let paused = false;
+      let doppler = true;
+
+      function markInteraction() { lastInteraction = performance.now(); }
+
+      function pointerPos(e) {
+        const r = canvas.getBoundingClientRect();
+        return { x: e.clientX - r.left, y: e.clientY - r.top };
+      }
+
+      function onPointerDown(e) {
+        canvas.setPointerCapture(e.pointerId);
+        pointers.set(e.pointerId, pointerPos(e));
+        markInteraction();
+        yawVel = 0; pitchVel = 0;
+        if (pointers.size === 1) {
+          dragLast = pointerPos(e);
+        } else if (pointers.size === 2) {
+          const pts = Array.from(pointers.values());
+          pinchStartDist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y) || 1;
+          pinchStartZoom = dist;
+          dragLast = null;
+        }
+      }
+      function onPointerMove(e) {
+        if (!pointers.has(e.pointerId)) return;
+        pointers.set(e.pointerId, pointerPos(e));
+        markInteraction();
+        if (pointers.size === 1 && dragLast) {
+          const p = pointerPos(e);
+          const dx = p.x - dragLast.x, dy = p.y - dragLast.y;
+          const speed = 0.0055;
+          yaw -= dx * speed;
+          pitch = Math.max(-1.483, Math.min(1.483, pitch - dy * speed)); // clamp to ~+-85 deg
+          yawVel = -dx * speed;
+          pitchVel = -dy * speed;
+          dragLast = p;
+        } else if (pointers.size === 2) {
+          const pts = Array.from(pointers.values());
+          const d = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y) || 1;
+          const ratio = pinchStartDist / d;
+          dist = Math.max(6, Math.min(60, pinchStartZoom * ratio));
+        }
+      }
+      function onPointerUp(e) {
+        pointers.delete(e.pointerId);
+        if (pointers.size < 1) dragLast = null;
+        else if (pointers.size === 1) {
+          dragLast = Array.from(pointers.values())[0];
+        }
+        try { canvas.releasePointerCapture(e.pointerId); } catch (err) { /* already released */ }
+      }
+      function onWheel(e) {
+        e.preventDefault();
+        markInteraction();
+        yawVel = 0; pitchVel = 0;
+        const factor = Math.exp(e.deltaY * 0.0012);
+        dist = Math.max(6, Math.min(60, dist * factor));
+      }
+      function onKeyDown(e) {
+        const t = e.target;
+        if (t && (t.tagName === 'INPUT' || t.tagName === 'BUTTON')) return;
+        if (e.code === 'Space') {
+          e.preventDefault();
+          setPaused(!paused);
+        } else if (e.code === 'KeyR') {
+          resetView();
+        }
+      }
+
+      canvas.addEventListener('pointerdown', onPointerDown);
+      canvas.addEventListener('pointermove', onPointerMove);
+      canvas.addEventListener('pointerup', onPointerUp);
+      canvas.addEventListener('pointercancel', onPointerUp);
+      canvas.addEventListener('wheel', onWheel, { passive: false });
+      window.addEventListener('keydown', onKeyDown);
+
+      function resetView() {
+        yaw = DEFAULT_YAW; pitch = DEFAULT_PITCH; dist = DEFAULT_DIST;
+        yawVel = 0; pitchVel = 0;
+        markInteraction();
+      }
+
+      // ---- UI controls -------------------------------------------------------------------------
+      const btnDoppler = document.createElement('button');
+      btnDoppler.type = 'button';
+      btnDoppler.className = 'ctl';
+      btnDoppler.textContent = 'Доплер';
+      btnDoppler.setAttribute('aria-pressed', 'true');
+      btnDoppler.addEventListener('click', () => setDoppler(!doppler));
+
+      const btnPause = document.createElement('button');
+      btnPause.type = 'button';
+      btnPause.className = 'ctl';
+      btnPause.textContent = 'Пауза';
+      btnPause.setAttribute('aria-pressed', 'false');
+      btnPause.addEventListener('click', () => setPaused(!paused));
+
+      const btnReset = document.createElement('button');
+      btnReset.type = 'button';
+      btnReset.className = 'ctl';
+      btnReset.textContent = 'Сброс вида';
+      btnReset.addEventListener('click', resetView);
+
+      ui.appendChild(btnDoppler);
+      ui.appendChild(btnPause);
+      ui.appendChild(btnReset);
+
+      function setDoppler(v) {
+        doppler = v;
+        btnDoppler.setAttribute('aria-pressed', String(v));
+      }
+      function setPaused(v) {
+        paused = v;
+        btnPause.setAttribute('aria-pressed', String(v));
+      }
+
+      // ---- resize / quality ---------------------------------------------------------------------
+      let quality = 0.5;
+      const fixedQ = host.dataset.fixedQuality ? parseFloat(host.dataset.fixedQuality) : null;
+      if (fixedQ) quality = fixedQ;
+
+      let sizeDirty = true;
+      const ro = new ResizeObserver(() => { sizeDirty = true; });
+      ro.observe(host);
+
+      function applySize() {
+        const dpr = Math.min(window.devicePixelRatio || 1, 2);
+        const cw = Math.max(1, Math.round(host.clientWidth * dpr * quality));
+        const ch = Math.max(1, Math.round(host.clientHeight * dpr * quality));
+        if (cw !== canvas.width || ch !== canvas.height) {
+          canvas.width = cw;
+          canvas.height = ch;
+          buildTargets(cw, ch);
+        }
+        sizeDirty = false;
+      }
+      applySize();
+
+      // ---- frame timing / adaptive quality --------------------------------------------------
+      let frameTimes = [];
+      let diskTime = 0;
+      let lastT = performance.now();
+      let raf = 0;
+
+      function drawFullscreen() {
+        gl.bindVertexArray(vao);
+        gl.drawArrays(gl.TRIANGLES, 0, 3);
+      }
+
+      function frame(now) {
+        raf = requestAnimationFrame(frame);
+        const dtMs = now - lastT;
+        const dt = Math.min(0.1, dtMs / 1000);
+        lastT = now;
+
+        // idle auto-drift: gentle yaw rotation resumes after 4s of no interaction
+        const idleFor = now - lastInteraction;
+        if (idleFor > 4000 && Math.abs(yawVel) < 1e-5 && Math.abs(pitchVel) < 1e-5) {
+          const driftSpeed = reducedMotion ? 0.008 : 0.028;
+          yaw += driftSpeed * dt;
+        } else {
+          // drag inertia with damping
+          yaw += yawVel;
+          pitch = Math.max(-1.483, Math.min(1.483, pitch + pitchVel));
+          yawVel *= 0.90;
+          pitchVel *= 0.90;
+          if (Math.abs(yawVel) < 1e-5) yawVel = 0;
+          if (Math.abs(pitchVel) < 1e-5) pitchVel = 0;
+        }
+
+        if (!paused) diskTime += dt;
+
+        if (sizeDirty) applySize();
+
+        // ---- build camera basis ---------------------------------------------------------------
+        const cy = Math.cos(pitch), sy = Math.sin(pitch);
+        const camPos = [
+          dist * cy * Math.sin(yaw),
+          dist * sy,
+          dist * cy * Math.cos(yaw),
+        ];
+        // forward = normalize(origin - camPos)
+        let fx = -camPos[0], fy = -camPos[1], fz = -camPos[2];
+        const flen = Math.hypot(fx, fy, fz) || 1;
+        fx /= flen; fy /= flen; fz /= flen;
+        // right = normalize(forward x worldUp)
+        const wux = 0, wuy = 1, wuz = 0;
+        let rx = fy * wuz - fz * wuy, ry = fz * wux - fx * wuz, rz = fx * wuy - fy * wux;
+        const rlen = Math.hypot(rx, ry, rz) || 1;
+        rx /= rlen; ry /= rlen; rz /= rlen;
+        // up = right x forward
+        const ux = ry * fz - rz * fy, uy = rz * fx - rx * fz, uz = rx * fy - ry * fx;
+
+        const aspect = canvas.width / canvas.height;
+        const tanHalfFov = Math.tan((FOV_DEG * Math.PI / 180) * 0.5);
+        const maxSteps = Math.round(70 + 150 * Math.min(1, Math.max(0, quality)));
+
+        // ================= pass A: ray trace into HDR target =================
+        gl.bindFramebuffer(gl.FRAMEBUFFER, hdrFbo);
+        gl.viewport(0, 0, fullW, fullH);
+        gl.useProgram(rayProg);
+        gl.uniform2f(rayU.u_resolution, fullW, fullH);
+        gl.uniform3f(rayU.u_camPos, camPos[0], camPos[1], camPos[2]);
+        gl.uniform3f(rayU.u_camRight, rx, ry, rz);
+        gl.uniform3f(rayU.u_camUp, ux, uy, uz);
+        gl.uniform3f(rayU.u_camForward, fx, fy, fz);
+        gl.uniform1f(rayU.u_tanHalfFov, tanHalfFov);
+        gl.uniform1f(rayU.u_aspect, aspect);
+        gl.uniform1f(rayU.u_diskTime, diskTime);
+        gl.uniform1f(rayU.u_doppler, doppler ? 1.0 : 0.0);
+        gl.uniform1i(rayU.u_maxSteps, maxSteps);
+        // Radians subtended by one output pixel, vertically - lets the shader size stars as
+        // true pinpoints (a fixed number of pixels) at any render resolution/quality level.
+        gl.uniform1f(rayU.u_pixelAngle, (FOV_DEG * Math.PI / 180) / canvas.height);
+        drawFullscreen();
+
+        // ================= pass B: bright-pass + downsample to 1/4 res =================
+        gl.bindFramebuffer(gl.FRAMEBUFFER, bloomFboA);
+        gl.viewport(0, 0, smallW, smallH);
+        gl.useProgram(downProg);
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, hdrTex);
+        gl.uniform1i(downU.u_tex, 0);
+        gl.uniform2f(downU.u_texel, 1 / fullW, 1 / fullH);
+        drawFullscreen();
+
+        // ================= pass C/D: separable gaussian blur, two ping-pong iterations =========
+        gl.useProgram(blurProg);
+        for (let i = 0; i < 2; i++) {
+          gl.bindFramebuffer(gl.FRAMEBUFFER, bloomFboB);
+          gl.bindTexture(gl.TEXTURE_2D, bloomTexA);
+          gl.uniform1i(blurU.u_tex, 0);
+          gl.uniform2f(blurU.u_dir, 1 / smallW, 0);
+          drawFullscreen();
+
+          gl.bindFramebuffer(gl.FRAMEBUFFER, bloomFboA);
+          gl.bindTexture(gl.TEXTURE_2D, bloomTexB);
+          gl.uniform2f(blurU.u_dir, 0, 1 / smallH);
+          drawFullscreen();
+        }
+
+        // ================= pass E: composite (tone map + bloom + vignette) to screen ===========
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        gl.viewport(0, 0, canvas.width, canvas.height);
+        gl.useProgram(compProg);
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, hdrTex);
+        gl.uniform1i(compU.u_hdr, 0);
+        gl.activeTexture(gl.TEXTURE1);
+        gl.bindTexture(gl.TEXTURE_2D, bloomTexA);
+        gl.uniform1i(compU.u_bloom, 1);
+        drawFullscreen();
+
+        // ---- adaptive quality bookkeeping ------------------------------------------------------
+        if (!fixedQ) {
+          frameTimes.push(performance.now() - now);
+          if (frameTimes.length >= 30) {
+            const avg = frameTimes.reduce((a, b) => a + b, 0) / frameTimes.length;
+            if (avg > 22) quality = Math.max(0.3, quality * 0.85);
+            else if (avg < 12) quality = Math.min(1, quality * 1.1);
+            frameTimes = [];
+            sizeDirty = true; // re-evaluate canvas size at the new quality next frame
+          }
+        }
+      }
+      raf = requestAnimationFrame(frame);
+
+      return {
+        unmount() {
+          cancelAnimationFrame(raf);
+          ro.disconnect();
+          canvas.removeEventListener('pointerdown', onPointerDown);
+          canvas.removeEventListener('pointermove', onPointerMove);
+          canvas.removeEventListener('pointerup', onPointerUp);
+          canvas.removeEventListener('pointercancel', onPointerUp);
+          canvas.removeEventListener('wheel', onWheel);
+          window.removeEventListener('keydown', onKeyDown);
+
+          deleteTargets();
+          gl.deleteVertexArray(vao);
+          for (const p of [rayProg, downProg, blurProg, compProg]) if (p) gl.deleteProgram(p);
+          gl.getExtension('WEBGL_lose_context')?.loseContext();
+
+          host.innerHTML = '';
+          ui.innerHTML = '';
+        },
+      };
+    },
+  };
+})();
+
+</script>
+<script>
+/* сцена: lenia */
+// «Ления» — continuous cellular automaton (Lenia, Bert Chan 2019), simulated entirely on the
+// GPU with float ping-pong textures. Every cell in a toroidal grid follows one rule:
+//   A(t+dt) = clip(A(t) + dt * G(K * A(t)), 0, 1)
+// where K is a smooth ring-shaped kernel (a weighted average of the neighbourhood) and G is a
+// bell curve that rewards neighbourhoods near a target density and punishes everything else.
+// From that single local rule, self-sustaining, shape-holding, swimming "creatures" (the
+// species Orbium unicaudatus) emerge — nothing about a creature's shape or motion is coded
+// directly, it is entirely a consequence of the kernel + growth math finding a stable orbit.
+(function () {
+  'use strict';
+  const SCENES = (window.SCENES = window.SCENES || {});
+
+  // ---- Lenia parameters (Orbium unicaudatus, as published by Bert Chan) -------------------
+  const R = 13;          // kernel radius, in cells
+  const MU = 0.15;        // growth curve centre
+  const SIGMA = 0.015;     // growth curve width
+  const DT = 0.1;         // time step (T = 1/dt = 10)
+  const SHORT_SIDE = 160;  // world cells along the shorter side of the viewport
+  const TRAIL_RATE = 0.008; // EMA rate for the phosphorescent trail buffer — small = long memory
+  const MAX_STIR_POINTS = 10;
+
+  // Orbium unicaudatus — the 20x20 seed pattern from Bert Chan's Lenia tutorial notebook.
+  // Verified offline (scratchpad/test-lenia-math.cjs): under these exact kernel/growth
+  // parameters it survives 600+ steps with mass stable to within ~1% (well inside the +-30%
+  // tolerance) after step 100, and its centroid travels ~370 cells of path length — it is a
+  // genuine, robust glider, not a knife-edge pattern that happens to survive a few frames.
+  const ORBIUM = [
+    [0,0,0,0,0,0,0.1,0.14,0.1,0,0,0.03,0.03,0,0,0.3,0,0,0,0],
+    [0,0,0,0,0,0.08,0.24,0.3,0.3,0.18,0.14,0.15,0.16,0.15,0.09,0.2,0,0,0,0],
+    [0,0,0,0,0,0.15,0.34,0.44,0.46,0.38,0.18,0.14,0.11,0.13,0.19,0.18,0.45,0,0,0],
+    [0,0,0,0,0.06,0.13,0.39,0.5,0.5,0.37,0.06,0,0,0,0.02,0.16,0.68,0,0,0],
+    [0,0,0,0.11,0.17,0.17,0.33,0.4,0.38,0.28,0.14,0,0,0,0,0,0.18,0.42,0,0],
+    [0,0,0.09,0.18,0.13,0.06,0.08,0.26,0.32,0.32,0.27,0,0,0,0,0,0,0.82,0,0],
+    [0.27,0,0.16,0.12,0,0,0,0.25,0.38,0.44,0.45,0.34,0,0,0,0,0,0.22,0.17,0],
+    [0,0.07,0.2,0.02,0,0,0,0.31,0.48,0.57,0.6,0.57,0,0,0,0,0,0,0.49,0],
+    [0,0.59,0.19,0,0,0,0,0.2,0.57,0.69,0.76,0.76,0.49,0,0,0,0,0,0.36,0],
+    [0,0.58,0.19,0,0,0,0,0,0.67,0.83,0.9,0.92,0.87,0.12,0,0,0,0,0.22,0.07],
+    [0,0,0.46,0,0,0,0,0,0.7,0.93,1,1,1,0.61,0,0,0,0,0.18,0.11],
+    [0,0,0.82,0,0,0,0,0,0.47,1,1,0.98,1,0.96,0.27,0,0,0,0.19,0.1],
+    [0,0,0.46,0,0,0,0,0,0.25,1,1,0.84,0.92,0.97,0.54,0.14,0.04,0.1,0.21,0.05],
+    [0,0,0,0.4,0,0,0,0,0.09,0.8,1,0.82,0.8,0.85,0.63,0.31,0.18,0.19,0.2,0.01],
+    [0,0,0,0.36,0.1,0,0,0,0.05,0.54,0.86,0.79,0.74,0.72,0.6,0.39,0.28,0.24,0.13,0],
+    [0,0,0,0.01,0.3,0.07,0,0,0.08,0.36,0.64,0.7,0.64,0.6,0.51,0.39,0.29,0.19,0.04,0],
+    [0,0,0,0,0.1,0.24,0.14,0.1,0.15,0.29,0.45,0.53,0.52,0.46,0.4,0.31,0.21,0.08,0,0],
+    [0,0,0,0,0,0.08,0.21,0.21,0.22,0.29,0.36,0.39,0.37,0.33,0.26,0.18,0.09,0,0,0],
+    [0,0,0,0,0,0,0.03,0.13,0.19,0.22,0.24,0.24,0.23,0.18,0.13,0.05,0,0,0,0],
+    [0,0,0,0,0,0,0,0,0.02,0.06,0.08,0.09,0.07,0.05,0.01,0,0,0,0,0]
+  ];
+
+  // ---- GLSL sources -------------------------------------------------------------------------
+  // A single fullscreen triangle, shared by every pass — no vertex buffers needed.
+  const VERT = `#version 300 es
+const vec2 POS[3] = vec2[3](vec2(-1.0, -1.0), vec2(3.0, -1.0), vec2(-1.0, 3.0));
+out vec2 vUv;
+void main() {
+  vec2 p = POS[gl_VertexID];
+  vUv = p * 0.5 + 0.5;
+  gl_Position = vec4(p, 0.0, 1.0);
+}`;
+
+  // The simulation step: convolve with the ring kernel, apply the growth bell curve, integrate.
+  // Runs as a multiple-render-target pass so the growth field (used later for a faint glow)
+  // is produced for free, without resampling the neighbourhood a second time.
+  function makeUpdateSrc(kernelN) {
+    return `#version 300 es
+precision highp float;
+#define KERNEL_N ${kernelN}
+uniform sampler2D uState;
+uniform sampler2D uKernel;   // Nx1 texture: (dx, dy, weight) per tap, weights sum to 1
+uniform vec2 uGridSize;
+uniform float uDt;
+uniform float uMu;
+uniform float uSigma;
+in vec2 vUv;
+layout(location = 0) out float outState;
+layout(location = 1) out float outGrowth;
+
+void main() {
+  // K * A : a weighted average of the neighbourhood through the precomputed ring kernel.
+  // uState wraps with REPEAT, so this samples across the torus edge for free.
+  float u = 0.0;
+  for (int i = 0; i < KERNEL_N; i++) {
+    vec3 k = texelFetch(uKernel, ivec2(i, 0), 0).xyz;
+    u += k.z * texture(uState, vUv + k.xy / uGridSize).r;
+  }
+  // G(u): a bell curve — neighbourhoods near mu grow, everything else decays back to 0.
+  // This one curve is the entire "biology": no birth/survival rule tables, just calculus.
+  float z = (u - uMu) / uSigma;
+  float g = 2.0 * exp(-0.5 * z * z) - 1.0;
+  float a = texture(uState, vUv).r;
+  outState = clamp(a + uDt * g, 0.0, 1.0);
+  outGrowth = g;
+}`;
+  }
+
+  const FS_TRAIL = `#version 300 es
+precision highp float;
+uniform sampler2D uState;
+uniform sampler2D uTrailPrev;
+uniform float uRate;
+in vec2 vUv;
+layout(location = 0) out float outTrail;
+void main() {
+  // Exponential moving average of the state — a slow-decaying phosphor memory of where
+  // living mass has recently been, so a creature's swim path glows faintly behind it.
+  float a = texture(uState, vUv).r;
+  float prev = texture(uTrailPrev, vUv).r;
+  outTrail = prev + (a - prev) * uRate;
+}`;
+
+  const FS_STAMP = `#version 300 es
+precision highp float;
+uniform sampler2D uState;
+uniform sampler2D uPattern;
+uniform vec2 uGridSize;
+uniform vec2 uCenter;       // stamp centre, in grid cells
+uniform float uAngle;
+uniform float uMirror;      // 0 or 1
+uniform float uPatternHalf; // half-extent of the (padded) pattern texture, in cells
+in vec2 vUv;
+layout(location = 0) out float outState;
+
+// Shortest signed offset on a torus of the given size (so a stamp near the wrap edge doesn't
+// get sampled from the wrong, far side of the world).
+vec2 wrapDelta(vec2 d, vec2 size) { return d - size * floor(d / size + 0.5); }
+
+void main() {
+  vec2 cell = vUv * uGridSize;
+  vec2 delta = wrapDelta(cell - uCenter, uGridSize);
+  float c = cos(-uAngle), s = sin(-uAngle);
+  vec2 local = mat2(c, -s, s, c) * delta;  // rotate the query point into the pattern's frame
+  if (uMirror > 0.5) local.x = -local.x;
+  vec2 puv = local / (uPatternHalf * 2.0) + 0.5;
+  float pv = 0.0;
+  if (puv.x >= 0.0 && puv.x <= 1.0 && puv.y >= 0.0 && puv.y <= 1.0) {
+    pv = texture(uPattern, puv).r;
+  }
+  float a = texture(uState, vUv).r;
+  outState = max(a, pv); // overlay the new creature without erasing whatever is already there
+}`;
+
+  const FS_STIR = `#version 300 es
+precision highp float;
+#define MAX_POINTS ${MAX_STIR_POINTS}
+uniform sampler2D uState;
+uniform vec2 uGridSize;
+uniform vec2 uPoints[MAX_POINTS];
+uniform int uPointCount;
+uniform float uRadius;
+uniform float uAmp;
+uniform float uSeed;
+in vec2 vUv;
+layout(location = 0) out float outState;
+
+vec2 wrapDelta(vec2 d, vec2 size) { return d - size * floor(d / size + 0.5); }
+float hash(vec2 p) { p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
+
+void main() {
+  vec2 cell = vUv * uGridSize;
+  float a = texture(uState, vUv).r;
+  float add = 0.0;
+  for (int i = 0; i < MAX_POINTS; i++) {
+    if (i >= uPointCount) break;
+    vec2 d = wrapDelta(cell - uPoints[i], uGridSize);
+    float r = length(d) / uRadius;
+    float fall = smoothstep(1.0, 0.0, r);
+    float n = hash(cell * 0.15 + uSeed + float(i) * 17.0);
+    add += fall * uAmp * (0.35 + 0.65 * n); // soft, slightly grainy — feeding the dish, not painting it
+  }
+  outState = clamp(a + add, 0.0, 1.0);
+}`;
+
+  const FS_DISPLAY = `#version 300 es
+precision highp float;
+uniform sampler2D uState;
+uniform sampler2D uTrail;
+uniform sampler2D uGrowth;
+uniform vec2 uGridSize;
+uniform vec2 uResolution;
+uniform float uTime;
+in vec2 vUv;
+out vec4 fragColor;
+
+int wrapi(int v, int n) { int m = v % n; return m < 0 ? m + n : m; }
+float texelAt(sampler2D tex, ivec2 c, ivec2 size) {
+  return texelFetch(tex, ivec2(wrapi(c.x, size.x), wrapi(c.y, size.y)), 0).r;
+}
+
+// Uniform cubic B-spline weights for a fractional offset t, for the 4 taps at relative
+// x = -1,0,1,2. Unlike Catmull-Rom (which interpolates through the samples and therefore
+// overshoots/rings near sharp transitions), every B-spline weight is non-negative and they
+// always sum to 1 — a pure, ring-free blur. That trades a little sharpness for outlines that
+// are genuinely smooth curves instead of stepped or haloed ones.
+vec4 bsplineWeights(float t) {
+  float t2 = t * t, t3 = t2 * t;
+  float w0 = (1.0 - t) * (1.0 - t) * (1.0 - t) / 6.0;
+  float w1 = (3.0 * t3 - 6.0 * t2 + 4.0) / 6.0;
+  float w2 = (-3.0 * t3 + 3.0 * t2 + 3.0 * t + 1.0) / 6.0;
+  float w3 = t3 / 6.0;
+  return vec4(w0, w1, w2, w3);
+}
+// 4x4-tap bicubic B-spline, done with texelFetch (no linear-filterable-float dependency).
+// This is the ONE smoothing filter used everywhere in this pass — state, trail, growth, and
+// every halo tap all go through it, so no field is left at nearest/blocky while another is
+// smooth (that mismatch is what produced staircase edges before).
+float sampleSmooth(sampler2D tex, vec2 uv, ivec2 size) {
+  vec2 texel = uv * vec2(size) - 0.5;
+  vec2 i0f = floor(texel);
+  vec2 f = texel - i0f;
+  vec4 wx = bsplineWeights(f.x);
+  vec4 wy = bsplineWeights(f.y);
+  ivec2 i0 = ivec2(i0f);
+  float result = 0.0;
+  for (int j = 0; j < 4; j++) {
+    float row = 0.0;
+    for (int i = 0; i < 4; i++) row += texelAt(tex, i0 + ivec2(i - 1, j - 1), size) * wx[i];
+    result += row * wy[j];
+  }
+  return result;
+}
+
+// Soft halo standing in for a separable blur: a handful of wide taps around the point,
+// averaged — each tap itself smooth (sampleSmooth), so the halo has no blocky stepping either.
+float sampleBloom(sampler2D tex, vec2 uv, ivec2 size) {
+  float sum = sampleSmooth(tex, uv, size) * 0.34;
+  const int N = 6;
+  for (int k = 0; k < N; k++) {
+    float ang = 6.28318530718 * float(k) / float(N);
+    vec2 offUv = vec2(cos(ang), sin(ang)) * 4.0 / vec2(size);
+    sum += sampleSmooth(tex, uv + offUv, size) * (0.66 / float(N));
+  }
+  return sum;
+}
+
+float hash(vec2 p) { p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
+
+void main() {
+  ivec2 size = ivec2(uGridSize);
+  float a = clamp(sampleSmooth(uState, vUv, size), 0.0, 1.0);
+  float t = clamp(sampleSmooth(uTrail, vUv, size), 0.0, 1.0);
+  float g = sampleSmooth(uGrowth, vUv, size);
+  float bloom = sampleBloom(uState, vUv, size);
+
+  // Bioluminescent, translucent palette: dark ground -> dim tissue trail -> a wide band of
+  // glowing mid teal for most of the body -> pale/near-white only in the small, densest core.
+  vec3 ground  = vec3(0.0118, 0.0314, 0.0392);
+  vec3 trailC  = vec3(0.0706, 0.2980, 0.3220); // brightened dim-teal, so wakes read clearly
+  vec3 bodyC   = vec3(0.1843, 0.7255, 0.6471); // #2FB9A5 — most of a creature reads as this
+  vec3 brightC = vec3(0.8471, 0.9490, 0.7686); // #D8F2C4
+  vec3 coreC   = vec3(0.9647, 1.0, 0.9412);    // #F6FFF0 — only the densest core
+  vec3 warmC   = vec3(0.9490, 0.7608, 0.4824); // #F2C27B — the leading, growing edge
+
+  // Wide, gentle onsets throughout so contours are soft curves rather than hard rings; bright
+  // and core are pushed to the high end and kept narrow, so only the densest tissue turns pale
+  // — the bulk of a creature stays a glowing, translucent mid teal.
+  vec3 col = mix(ground, trailC, smoothstep(0.02, 0.5, t));
+  col = mix(col, bodyC, smoothstep(0.05, 0.55, a));
+  col = mix(col, brightC, smoothstep(0.62, 0.88, a));
+  col = mix(col, coreC, smoothstep(0.90, 0.99, a));
+
+  // Metabolism colour: G > 0 is tissue being built (the leading edge a creature swims into) —
+  // add a faint warm GLOW there (additive, not a fill, so it never replaces the translucent
+  // teal body). G < 0 is tissue decaying back down (the trailing edge) — left untouched, cool.
+  // The growing band sits mostly where tissue is still thin (low a, not yet full body), so gate
+  // presence with a low threshold rather than raw a — multiplying by a directly would suppress
+  // the tint exactly where growth is strongest.
+  float gPos = clamp(g, 0.0, 1.0);
+  float presence = smoothstep(0.03, 0.3, a);
+  col += warmC * gPos * presence * 0.22;
+
+  // Soft bloom under bright tissue, like light scattering through tissue and water.
+  col += brightC * bloom * bloom * 0.4;
+
+  // Dark-field microscope vignette: a soft, wide falloff (never a hard mask) plus a faint cool
+  // darkening further out, for the sense of a lit field even against a near-black background.
+  vec2 p = (vUv * 2.0 - 1.0);
+  p.x *= uResolution.x / uResolution.y;
+  float r = length(p);
+  float vig = smoothstep(0.55, 1.35, r);
+  col *= mix(1.0, 0.78, vig);
+  col -= vec3(0.0, 0.006, 0.008) * smoothstep(0.75, 1.35, r);
+
+  // Very faint animated grain — keeps the dish from reading as a flat digital gradient.
+  float n = hash(vUv * uResolution.xy * 0.5 + uTime * 97.0);
+  col += (n - 0.5) * 0.018;
+
+  fragColor = vec4(max(col, 0.0), 1.0);
+}`;
+
+  // ---- small GL helpers ----------------------------------------------------------------------
+  function compile(gl, type, src) {
+    const sh = gl.createShader(type);
+    gl.shaderSource(sh, src);
+    gl.compileShader(sh);
+    if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
+      console.error('lenia: shader compile error:', gl.getShaderInfoLog(sh));
+      gl.deleteShader(sh);
+      return null;
+    }
+    return sh;
+  }
+  function link(gl, vsSrc, fsSrc) {
+    const vs = compile(gl, gl.VERTEX_SHADER, vsSrc);
+    const fs = compile(gl, gl.FRAGMENT_SHADER, fsSrc);
+    if (!vs || !fs) return null;
+    const prog = gl.createProgram();
+    gl.attachShader(prog, vs);
+    gl.attachShader(prog, fs);
+    gl.linkProgram(prog);
+    gl.deleteShader(vs);
+    gl.deleteShader(fs);
+    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+      console.error('lenia: program link error:', gl.getProgramInfoLog(prog));
+      gl.deleteProgram(prog);
+      return null;
+    }
+    return prog;
+  }
+  function uniforms(gl, prog, names) {
+    const u = {};
+    for (const n of names) u[n] = gl.getUniformLocation(prog, n);
+    return u;
+  }
+
+  SCENES.lenia = {
+    id: 'lenia',
+    name: 'Ления',
+    tagline: 'Непрерывный клеточный автомат, в котором сами собой живут существа',
+    about: 'Каждая клетка следует одному правилу: взвешенная сумма соседей через кольцевое ' +
+      'ядро проходит через колоколообразную функцию роста и решает, прибавить клетке ' +
+      'вещества или отнять. Из этой единственной формулы, без единой строчки про «тело» или ' +
+      '«поведение», рождаются существа, которые держат форму, плавают и сталкиваются — вид ' +
+      'называется Orbium unicaudatus.',
+    spec: [
+      ['Ядро', 'кольцо, R = 13 клеток'],
+      ['Рост', 'μ = 0,15, σ = 0,015'],
+      ['Шаг времени', 'Δt = 0,1 (T = 10)'],
+      ['Мир', 'тор, короткая сторона ≈ 160 клеток, длинная — по пропорциям экрана'],
+      ['Вид', 'Orbium unicaudatus'],
+      ['Автор модели', 'Берт Чан, 2019']
+    ],
+    hint: 'Нажмите — новое существо · проведите — подкормить',
+    accent: '#7FE0C4',
+
+    mount(host, ui) {
+      const canvas = document.createElement('canvas');
+      canvas.style.display = 'block';
+      canvas.style.width = '100%';
+      canvas.style.height = '100%';
+      canvas.style.touchAction = 'none';
+      host.appendChild(canvas);
+
+      const gl = canvas.getContext('webgl2', {
+        antialias: false, alpha: false, depth: false, stencil: false,
+        preserveDrawingBuffer: false, powerPreference: 'high-performance'
+      });
+      const floatExt = gl && gl.getExtension('EXT_color_buffer_float');
+      if (!gl || !floatExt) {
+        const div = document.createElement('div');
+        div.className = 'scene-fallback';
+        div.textContent = 'Для этой сцены нужен WebGL2 — откройте страницу в свежем Chrome, Firefox или Safari.';
+        host.innerHTML = '';
+        host.appendChild(div);
+        return { unmount() { host.innerHTML = ''; ui.innerHTML = ''; } };
+      }
+
+      // ---- build the kernel (CPU) and upload as a texture of (dx, dy, weight) taps ----------
+      const kernelTaps = [];
+      { // Local scope: bump-shell profile exp(4 - 1/(r(1-r))) on normalised radius r in (0,1).
+        const R2 = R * R;
+        for (let dy = -R; dy <= R; dy++) {
+          for (let dx = -R; dx <= R; dx++) {
+            const d2 = dx * dx + dy * dy;
+            if (d2 === 0 || d2 >= R2) continue;
+            const r = Math.sqrt(d2) / R;
+            const w = Math.exp(4 - 1 / (r * (1 - r)));
+            if (w > 1e-6) kernelTaps.push(dx, dy, w);
+          }
+        }
+      }
+      const kernelN = kernelTaps.length / 3;
+      {
+        let sum = 0;
+        for (let i = 0; i < kernelN; i++) sum += kernelTaps[i * 3 + 2];
+        for (let i = 0; i < kernelN; i++) kernelTaps[i * 3 + 2] /= sum;
+      }
+      const kernelData = new Float32Array(kernelN * 4);
+      for (let i = 0; i < kernelN; i++) {
+        kernelData[i * 4 + 0] = kernelTaps[i * 3 + 0];
+        kernelData[i * 4 + 1] = kernelTaps[i * 3 + 1];
+        kernelData[i * 4 + 2] = kernelTaps[i * 3 + 2];
+        kernelData[i * 4 + 3] = 0;
+      }
+      const kernelTex = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, kernelTex);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, kernelN, 1, 0, gl.RGBA, gl.FLOAT, kernelData);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+      // ---- Orbium pattern texture, padded so rotated sampling never bleeds off the edge -----
+      const PAD = 2, PSIZE = 20 + PAD * 2;
+      const patternData = new Uint8Array(PSIZE * PSIZE);
+      for (let y = 0; y < 20; y++) {
+        for (let x = 0; x < 20; x++) {
+          patternData[(y + PAD) * PSIZE + (x + PAD)] = Math.round(Math.min(1, ORBIUM[y][x]) * 255);
+        }
+      }
+      const patternTex = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, patternTex);
+      gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, PSIZE, PSIZE, 0, gl.RED, gl.UNSIGNED_BYTE, patternData);
+      gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      const patternHalf = PSIZE / 2;
+
+      // ---- programs ---------------------------------------------------------------------------
+      const progUpdate = link(gl, VERT, makeUpdateSrc(kernelN));
+      const progTrail = link(gl, VERT, FS_TRAIL);
+      const progStamp = link(gl, VERT, FS_STAMP);
+      const progStir = link(gl, VERT, FS_STIR);
+      const progDisplay = link(gl, VERT, FS_DISPLAY);
+      if (!progUpdate || !progTrail || !progStamp || !progStir || !progDisplay) {
+        const div = document.createElement('div');
+        div.className = 'scene-fallback';
+        div.textContent = 'Для этой сцены нужен WebGL2 — откройте страницу в свежем Chrome, Firefox или Safari.';
+        host.innerHTML = '';
+        host.appendChild(div);
+        return { unmount() { host.innerHTML = ''; ui.innerHTML = ''; } };
+      }
+      const uUpdate = uniforms(gl, progUpdate, ['uState', 'uKernel', 'uGridSize', 'uDt', 'uMu', 'uSigma']);
+      const uTrail = uniforms(gl, progTrail, ['uState', 'uTrailPrev', 'uRate']);
+      const uStamp = uniforms(gl, progStamp, ['uState', 'uPattern', 'uGridSize', 'uCenter', 'uAngle', 'uMirror', 'uPatternHalf']);
+      const uStir = uniforms(gl, progStir, ['uState', 'uGridSize', 'uPoints', 'uPointCount', 'uRadius', 'uAmp', 'uSeed']);
+      const uDisplay = uniforms(gl, progDisplay, ['uState', 'uTrail', 'uGrowth', 'uGridSize', 'uResolution', 'uTime']);
+
+      const vao = gl.createVertexArray();
+      gl.bindVertexArray(vao);
+
+      // ---- sim-grid resources (rebuilt on significant resize) -------------------------------
+      let gridW = 0, gridH = 0;
+      let stateTex = [null, null], growthTex = null, trailTex = [null, null];
+      let simFbo = [null, null], trailFbo = [null, null];
+      let stateIdx = 0, trailIdx = 0;
+
+      function makeFloatTex(w, h, internalFormat, format, type) {
+        const tex = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, tex);
+        gl.texImage2D(gl.TEXTURE_2D, 0, internalFormat, w, h, 0, format, type, null);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+        return tex;
+      }
+      function attachCheck(label) {
+        const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
+        if (status !== gl.FRAMEBUFFER_COMPLETE) console.error('lenia: framebuffer incomplete (' + label + '):', status);
+      }
+
+      function destroyGrid() {
+        for (const t of stateTex) if (t) gl.deleteTexture(t);
+        for (const t of trailTex) if (t) gl.deleteTexture(t);
+        if (growthTex) gl.deleteTexture(growthTex);
+        for (const f of simFbo) if (f) gl.deleteFramebuffer(f);
+        for (const f of trailFbo) if (f) gl.deleteFramebuffer(f);
+      }
+
+      function buildGrid(w, h) {
+        destroyGrid();
+        gridW = w; gridH = h;
+        stateTex = [makeFloatTex(w, h, gl.R32F, gl.RED, gl.FLOAT), makeFloatTex(w, h, gl.R32F, gl.RED, gl.FLOAT)];
+        growthTex = makeFloatTex(w, h, gl.R16F, gl.RED, gl.FLOAT);
+        trailTex = [makeFloatTex(w, h, gl.R16F, gl.RED, gl.FLOAT), makeFloatTex(w, h, gl.R16F, gl.RED, gl.FLOAT)];
+        simFbo = [gl.createFramebuffer(), gl.createFramebuffer()];
+        for (let i = 0; i < 2; i++) {
+          gl.bindFramebuffer(gl.FRAMEBUFFER, simFbo[i]);
+          gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, stateTex[i], 0);
+          gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT1, gl.TEXTURE_2D, growthTex, 0);
+          attachCheck('sim' + i);
+        }
+        trailFbo = [gl.createFramebuffer(), gl.createFramebuffer()];
+        for (let i = 0; i < 2; i++) {
+          gl.bindFramebuffer(gl.FRAMEBUFFER, trailFbo[i]);
+          gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, trailTex[i], 0);
+          attachCheck('trail' + i);
+        }
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        stateIdx = 0; trailIdx = 0;
+      }
+
+      function clearAll() {
+        gl.clearColor(0, 0, 0, 0);
+        gl.viewport(0, 0, gridW, gridH);
+        for (const f of simFbo) {
+          gl.bindFramebuffer(gl.FRAMEBUFFER, f);
+          gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1]);
+          gl.clear(gl.COLOR_BUFFER_BIT);
+        }
+        for (const f of trailFbo) {
+          gl.bindFramebuffer(gl.FRAMEBUFFER, f);
+          gl.drawBuffers([gl.COLOR_ATTACHMENT0]);
+          gl.clear(gl.COLOR_BUFFER_BIT);
+        }
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        stateIdx = 0; trailIdx = 0;
+      }
+
+      // ---- drawing one creature / one soft noise blob into the live state texture -----------
+      function drawStamp(cx, cy, angle, mirror) {
+        const dst = 1 - stateIdx;
+        gl.viewport(0, 0, gridW, gridH);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, simFbo[dst]);
+        gl.drawBuffers([gl.COLOR_ATTACHMENT0]);
+        gl.useProgram(progStamp);
+        gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, stateTex[stateIdx]);
+        gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, patternTex);
+        gl.uniform1i(uStamp.uState, 0);
+        gl.uniform1i(uStamp.uPattern, 1);
+        gl.uniform2f(uStamp.uGridSize, gridW, gridH);
+        gl.uniform2f(uStamp.uCenter, cx, cy);
+        gl.uniform1f(uStamp.uAngle, angle);
+        gl.uniform1f(uStamp.uMirror, mirror ? 1 : 0);
+        gl.uniform1f(uStamp.uPatternHalf, patternHalf);
+        gl.drawArrays(gl.TRIANGLES, 0, 3);
+        stateIdx = dst;
+      }
+
+      function stampNoiseBlob(cx, cy, radius, amp, seed) {
+        const dst = 1 - stateIdx;
+        gl.viewport(0, 0, gridW, gridH);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, simFbo[dst]);
+        gl.drawBuffers([gl.COLOR_ATTACHMENT0]);
+        gl.useProgram(progStir);
+        gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, stateTex[stateIdx]);
+        gl.uniform1i(uStir.uState, 0);
+        gl.uniform2f(uStir.uGridSize, gridW, gridH);
+        gl.uniform2fv(uStir.uPoints, new Float32Array([cx, cy]));
+        gl.uniform1i(uStir.uPointCount, 1);
+        gl.uniform1f(uStir.uRadius, radius);
+        gl.uniform1f(uStir.uAmp, amp);
+        gl.uniform1f(uStir.uSeed, seed);
+        gl.drawArrays(gl.TRIANGLES, 0, 3);
+        stateIdx = dst;
+      }
+
+      function seedDish() {
+        clearAll();
+        const short = Math.min(gridW, gridH);
+        const nOrbium = 10 + Math.floor(Math.random() * 5); // 10..14
+        const placed = [];
+        // Keep freshly-seeded creatures outside each other's kernel reach (radius R) at spawn
+        // time, so the dish opens with everyone swimming independently rather than already
+        // merging. Two Orbium bodies (radius ~patternHalf) only start influencing each other's
+        // growth once their centres are closer than roughly R + patternHalf (~25 cells); this
+        // keeps a margin beyond that. Checked against the actual placement algorithm
+        // (scratchpad/test-placement.cjs) to stay a 0%-forced-close fit up to 14 creatures on
+        // both a desktop- and a phone-sized grid at the current SHORT_SIDE. Collisions are still
+        // expected eventually — Orbium-Orbium contact has no special-cased "bounce", it can
+        // merge, destroy both, or spawn a stable compound, entirely as a consequence of the same
+        // shared growth field.
+        const minDist = 36;
+        for (let i = 0; i < nOrbium; i++) {
+          let cx = 0, cy = 0, ok = false;
+          for (let attempt = 0; attempt < 30 && !ok; attempt++) {
+            cx = Math.random() * gridW;
+            cy = Math.random() * gridH;
+            ok = true;
+            for (const p of placed) {
+              let dx = Math.abs(cx - p[0]); dx = Math.min(dx, gridW - dx);
+              let dy = Math.abs(cy - p[1]); dy = Math.min(dy, gridH - dy);
+              if (Math.hypot(dx, dy) < minDist) { ok = false; break; }
+            }
+          }
+          placed.push([cx, cy]);
+          drawStamp(cx, cy, Math.random() * Math.PI * 2, Math.random() < 0.5);
+        }
+        const nBlobs = 2 + Math.floor(Math.random() * 2); // 2..3
+        for (let i = 0; i < nBlobs; i++) {
+          stampNoiseBlob(Math.random() * gridW, Math.random() * gridH,
+            short * 0.09 + Math.random() * short * 0.05, 0.5 + Math.random() * 0.25, Math.random() * 100);
+        }
+      }
+
+      // ---- sizing: world aspect follows the viewport; sim resolution is independent of the
+      // adaptive display "quality" (which only affects the display canvas' pixel resolution) --
+      function computeGrid() {
+        const cw = Math.max(1, host.clientWidth), ch = Math.max(1, host.clientHeight);
+        let w, h;
+        if (cw <= ch) { w = SHORT_SIDE; h = Math.round(SHORT_SIDE * ch / cw); }
+        else { h = SHORT_SIDE; w = Math.round(SHORT_SIDE * cw / ch); }
+        const maxLong = Math.round(SHORT_SIDE * 2.4);
+        w = Math.min(Math.max(w, 60), maxLong);
+        h = Math.min(Math.max(h, 60), maxLong);
+        return { w, h };
+      }
+
+      { const g0 = computeGrid(); buildGrid(g0.w, g0.h); seedDish(); }
+
+      // ---- adaptive quality (display resolution) + adaptive sim step count ------------------
+      const fixedQuality = host.dataset.fixedQuality !== undefined;
+      let quality = fixedQuality ? parseFloat(host.dataset.fixedQuality) : 1.0;
+      let stepsPerFrame = 2;
+      const frameTimes = [];
+
+      function applyCanvasSize() {
+        const dpr = Math.min(window.devicePixelRatio || 1, 2);
+        const w = Math.max(1, Math.round(host.clientWidth * dpr * quality));
+        const h = Math.max(1, Math.round(host.clientHeight * dpr * quality));
+        if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+      }
+
+      // ---- one Euler step of the whole grid ---------------------------------------------------
+      function simStep() {
+        const dst = 1 - stateIdx;
+        gl.viewport(0, 0, gridW, gridH);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, simFbo[dst]);
+        gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1]);
+        gl.useProgram(progUpdate);
+        gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, stateTex[stateIdx]);
+        gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, kernelTex);
+        gl.uniform1i(uUpdate.uState, 0);
+        gl.uniform1i(uUpdate.uKernel, 1);
+        gl.uniform2f(uUpdate.uGridSize, gridW, gridH);
+        gl.uniform1f(uUpdate.uDt, DT);
+        gl.uniform1f(uUpdate.uMu, MU);
+        gl.uniform1f(uUpdate.uSigma, SIGMA);
+        gl.drawArrays(gl.TRIANGLES, 0, 3);
+        stateIdx = dst;
+      }
+
+      function trailStep() {
+        const dst = 1 - trailIdx;
+        gl.viewport(0, 0, gridW, gridH);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, trailFbo[dst]);
+        gl.drawBuffers([gl.COLOR_ATTACHMENT0]);
+        gl.useProgram(progTrail);
+        gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, stateTex[stateIdx]);
+        gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, trailTex[trailIdx]);
+        gl.uniform1i(uTrail.uState, 0);
+        gl.uniform1i(uTrail.uTrailPrev, 1);
+        gl.uniform1f(uTrail.uRate, TRAIL_RATE);
+        gl.drawArrays(gl.TRIANGLES, 0, 3);
+        trailIdx = dst;
+      }
+
+      function renderDisplay(t) {
+        gl.viewport(0, 0, canvas.width, canvas.height);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        gl.useProgram(progDisplay);
+        gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, stateTex[stateIdx]);
+        gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, trailTex[trailIdx]);
+        gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, growthTex);
+        gl.uniform1i(uDisplay.uState, 0);
+        gl.uniform1i(uDisplay.uTrail, 1);
+        gl.uniform1i(uDisplay.uGrowth, 2);
+        gl.uniform2f(uDisplay.uGridSize, gridW, gridH);
+        gl.uniform2f(uDisplay.uResolution, canvas.width, canvas.height);
+        gl.uniform1f(uDisplay.uTime, t);
+        gl.drawArrays(gl.TRIANGLES, 0, 3);
+      }
+
+      // ---- interaction: tap = new creature, drag = soft feeding brush -----------------------
+      // The brush is re-applied every single automaton sub-step (not once per rendered frame):
+      // scratchpad/tune-stir.cjs showed that with 2-3 sim steps per frame (the adaptive default),
+      // a "paint once per frame" brush gets fully erased by that frame's own decay before it is
+      // ever seen, because 2-3 consecutive Euler steps can subtract more than a modest brush
+      // adds. Painting at the *same* cadence as decay keeps a steady, controllable glow instead.
+      let paused = false;
+      const pointers = new Map();
+      const activeStir = new Map(); // pointerId -> [cx, cy], live position while held & moved
+      const CLICK_SLOP = 6; // px
+
+      function eventToCell(e) {
+        const rect = canvas.getBoundingClientRect();
+        const fx = (e.clientX - rect.left) / Math.max(1, rect.width);
+        const fy = (e.clientY - rect.top) / Math.max(1, rect.height);
+        return [fx * gridW, fy * gridH];
+      }
+
+      function onPointerDown(e) {
+        canvas.setPointerCapture(e.pointerId);
+        pointers.set(e.pointerId, { sx: e.clientX, sy: e.clientY, moved: false });
+      }
+      function onPointerMove(e) {
+        const p = pointers.get(e.pointerId);
+        if (!p) return;
+        const dx = e.clientX - p.sx, dy = e.clientY - p.sy;
+        if (!p.moved && Math.hypot(dx, dy) < CLICK_SLOP) return;
+        p.moved = true;
+        const [cx, cy] = eventToCell(e);
+        activeStir.set(e.pointerId, [cx, cy]);
+      }
+      function onPointerUp(e) {
+        const p = pointers.get(e.pointerId);
+        pointers.delete(e.pointerId);
+        activeStir.delete(e.pointerId);
+        try { canvas.releasePointerCapture(e.pointerId); } catch (err) { /* already released */ }
+        if (p && !p.moved) {
+          const [cx, cy] = eventToCell(e);
+          drawStamp(cx, cy, Math.random() * Math.PI * 2, Math.random() < 0.5);
+        }
+      }
+      canvas.addEventListener('pointerdown', onPointerDown);
+      canvas.addEventListener('pointermove', onPointerMove);
+      canvas.addEventListener('pointerup', onPointerUp);
+      canvas.addEventListener('pointercancel', onPointerUp);
+
+      // Applies the feeding brush at every currently-held pointer's live position. Called once
+      // per automaton sub-step so painting and decay stay in lockstep regardless of stepsPerFrame.
+      function applyActiveStir(seed) {
+        if (activeStir.size === 0) return;
+        const pts = new Float32Array(MAX_STIR_POINTS * 2);
+        let count = 0;
+        for (const [cx, cy] of activeStir.values()) {
+          if (count >= MAX_STIR_POINTS) break;
+          pts[count * 2] = cx; pts[count * 2 + 1] = cy; count++;
+        }
+        const dst = 1 - stateIdx;
+        gl.viewport(0, 0, gridW, gridH);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, simFbo[dst]);
+        gl.drawBuffers([gl.COLOR_ATTACHMENT0]);
+        gl.useProgram(progStir);
+        gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, stateTex[stateIdx]);
+        gl.uniform1i(uStir.uState, 0);
+        gl.uniform2f(uStir.uGridSize, gridW, gridH);
+        gl.uniform2fv(uStir.uPoints, pts);
+        gl.uniform1i(uStir.uPointCount, count);
+        // Tuned in scratchpad/tune-stir.cjs against the real growth/kernel constants, assuming
+        // one brush application per automaton step: below ~0.28 an isolated stroke always
+        // dissolves within roughly a second of release (no runaway "spontaneous life"); 0.22
+        // sits comfortably under that critical mass while building a clearly visible glow
+        // within a few steps of continuous dragging.
+        gl.uniform1f(uStir.uRadius, Math.min(gridW, gridH) * 0.04);
+        gl.uniform1f(uStir.uAmp, 0.22);
+        gl.uniform1f(uStir.uSeed, seed);
+        gl.drawArrays(gl.TRIANGLES, 0, 3);
+        stateIdx = dst;
+      }
+
+      // ---- ui buttons -------------------------------------------------------------------------
+      const btnSeed = document.createElement('button');
+      btnSeed.type = 'button'; btnSeed.className = 'ctl'; btnSeed.textContent = 'Засеять';
+      btnSeed.addEventListener('click', () => seedDish());
+
+      const btnClear = document.createElement('button');
+      btnClear.type = 'button'; btnClear.className = 'ctl'; btnClear.textContent = 'Очистить';
+      btnClear.addEventListener('click', () => clearAll());
+
+      const btnPause = document.createElement('button');
+      btnPause.type = 'button'; btnPause.className = 'ctl'; btnPause.textContent = 'Пауза';
+      btnPause.setAttribute('aria-pressed', 'false');
+      btnPause.addEventListener('click', () => setPaused(!paused));
+
+      ui.appendChild(btnSeed);
+      ui.appendChild(btnClear);
+      ui.appendChild(btnPause);
+
+      function setPaused(v) {
+        paused = v;
+        btnPause.setAttribute('aria-pressed', v ? 'true' : 'false');
+      }
+
+      function onKey(e) {
+        const t = e.target;
+        if (t && (t.tagName === 'INPUT' || t.tagName === 'BUTTON')) return;
+        if (e.code === 'Space') { e.preventDefault(); setPaused(!paused); }
+        else if (e.code === 'KeyR') { seedDish(); }
+      }
+      window.addEventListener('keydown', onKey);
+
+      // ---- resize: world aspect follows the viewport; only rebuild on a real size change ----
+      let resizeTimer = null;
+      const ro = new ResizeObserver(() => {
+        if (resizeTimer) clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(() => {
+          const g = computeGrid();
+          if (Math.abs(g.w - gridW) >= 8 || Math.abs(g.h - gridH) >= 8) {
+            buildGrid(g.w, g.h);
+            seedDish();
+          }
+        }, 200);
+      });
+      ro.observe(host);
+
+      // ---- main loop ----------------------------------------------------------------------------
+      const reducedMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      let raf = 0, lastNow = null, simTime = 0;
+      function frame(now) {
+        raf = requestAnimationFrame(frame);
+        const dt = lastNow === null ? 16.7 : Math.min(now - lastNow, 100);
+        lastNow = now;
+        frameTimes.push(dt);
+        if (frameTimes.length >= 30) {
+          let sum = 0; for (const v of frameTimes) sum += v;
+          const avg = sum / frameTimes.length;
+          frameTimes.length = 0;
+          if (!fixedQuality) {
+            if (avg > 22) quality = Math.max(0.3, quality * 0.85);
+            else if (avg < 12) quality = Math.min(1, quality * 1.1);
+          }
+          if (avg > 26) stepsPerFrame = Math.max(1, stepsPerFrame - 1);
+          else if (avg < 14) stepsPerFrame = Math.min(3, stepsPerFrame + 1);
+        }
+        applyCanvasSize();
+
+        if (!paused) {
+          simTime += dt * 0.001;
+          // Paint immediately before each decay step, at the same cadence, so a held/dragged
+          // brush reaches a stable visible glow instead of being outrun by multi-step decay.
+          for (let i = 0; i < stepsPerFrame; i++) {
+            applyActiveStir(now * 0.001 + i * 0.017);
+            simStep();
+          }
+          trailStep();
+        }
+
+        renderDisplay(reducedMotion ? 0 : simTime);
+      }
+      raf = requestAnimationFrame(frame);
+
+      return {
+        unmount() {
+          cancelAnimationFrame(raf);
+          ro.disconnect();
+          if (resizeTimer) clearTimeout(resizeTimer);
+          window.removeEventListener('keydown', onKey);
+          canvas.removeEventListener('pointerdown', onPointerDown);
+          canvas.removeEventListener('pointermove', onPointerMove);
+          canvas.removeEventListener('pointerup', onPointerUp);
+          canvas.removeEventListener('pointercancel', onPointerUp);
+          destroyGrid();
+          gl.deleteTexture(kernelTex);
+          gl.deleteTexture(patternTex);
+          gl.deleteProgram(progUpdate);
+          gl.deleteProgram(progTrail);
+          gl.deleteProgram(progStamp);
+          gl.deleteProgram(progStir);
+          gl.deleteProgram(progDisplay);
+          gl.deleteVertexArray(vao);
+          gl.getExtension('WEBGL_lose_context') && gl.getExtension('WEBGL_lose_context').loseContext();
+          canvas.remove();
+          ui.innerHTML = '';
+        }
+      };
+    }
+  };
+})();
+
+</script>
+<script>
+/* сцена: mandelbulb */
+(function () {
+  'use strict';
+  const SCENES = (window.SCENES = window.SCENES || {});
+
+  // ---------------------------------------------------------------------
+  // GLSL: full-screen triangle vertex shader
+  // ---------------------------------------------------------------------
+  const VERT_SRC = `#version 300 es
+layout(location = 0) in vec2 aPos;
+void main() {
+  gl_Position = vec4(aPos, 0.0, 1.0);
+}
+`;
+
+  // ---------------------------------------------------------------------
+  // GLSL: ray-marched Mandelbulb fragment shader
+  // ---------------------------------------------------------------------
+  const FRAG_SRC = `#version 300 es
+precision highp float;
+
+uniform vec2  uRes;
+uniform float uTime;
+uniform float uPower;
+uniform vec3  uCamPos;
+uniform vec3  uCamTarget;
+uniform float uFov;
+out vec4 fragColor;
+
+// cheap 2D hash, used to dither the dark background so its smooth
+// gradient doesn't band.
+float hash21(vec2 p) {
+  p = fract(p * vec2(123.34, 456.21));
+  p += dot(p, p + 45.32);
+  return fract(p.x * p.y);
+}
+
+// Distance estimator for the Mandelbulb: iterate z -> z^n + c in spherical
+// (triplex) coordinates and use Hubbard-Douady's DE = 0.5 * ln(r) * r / dr,
+// where dr tracks the running derivative magnitude of the orbit. "trap"
+// collects the minimum |x|, |y|, |z| and radius seen along the orbit -
+// classic "orbit trap" data used later to colour the surface by its
+// internal structure instead of by iteration count.
+const int ITER = 9;
+const float BAILOUT = 4.0;
+
+float mandelbulbDE(vec3 p, float power, out vec4 trap) {
+  vec3 z = p;
+  float dr = 1.0;
+  float r = 0.0;
+  trap = vec4(1e5);
+  for (int i = 0; i < ITER; i++) {
+    r = max(length(z), 1e-8);
+    if (r > BAILOUT) break;
+    trap = min(trap, vec4(abs(z.x), abs(z.y), abs(z.z), r));
+
+    float theta = acos(clamp(z.z / r, -1.0, 1.0));
+    float phi = atan(z.y, z.x);
+    dr = pow(r, power - 1.0) * power * dr + 1.0;
+
+    float zr = pow(r, power);
+    theta *= power;
+    phi *= power;
+
+    z = zr * vec3(sin(theta) * cos(phi), sin(theta) * sin(phi), cos(theta));
+    z += p;
+  }
+  return 0.5 * log(r) * r / dr;
+}
+
+vec3 calcNormal(vec3 p, float power, float e) {
+  vec4 tr;
+  vec2 k = vec2(1.0, -1.0);
+  return normalize(
+    k.xyy * mandelbulbDE(p + k.xyy * e, power, tr) +
+    k.yyx * mandelbulbDE(p + k.yyx * e, power, tr) +
+    k.yxy * mandelbulbDE(p + k.yxy * e, power, tr) +
+    k.xxx * mandelbulbDE(p + k.xxx * e, power, tr)
+  );
+}
+
+// Short march toward the light, taking the minimum ratio of distance to
+// travelled length as a cheap soft-shadow penumbra term.
+float softShadow(vec3 ro, vec3 rd, float power) {
+  float res = 1.0;
+  float t = 0.01;
+  for (int i = 0; i < 20; i++) {
+    vec4 tr;
+    float d = mandelbulbDE(ro + rd * t, power, tr);
+    if (d < 0.0006) return 0.0;
+    res = min(res, 9.0 * d / t);
+    t += clamp(d, 0.01, 0.18);
+    if (t > 2.2) break;
+  }
+  return clamp(res, 0.0, 1.0);
+}
+
+// Ambient occlusion by sampling the DE a few steps out along the normal -
+// a surface tucked into a crevice reports a smaller distance than its
+// nominal offset, which this turns into a darkening factor.
+float calcAO(vec3 p, vec3 n, float power) {
+  float occ = 0.0;
+  float sca = 1.0;
+  for (int i = 0; i < 5; i++) {
+    float h = 0.02 + 0.09 * float(i) / 4.0;
+    vec4 tr;
+    float d = mandelbulbDE(p + n * h, power, tr);
+    occ += (h - d) * sca;
+    sca *= 0.7;
+  }
+  return clamp(1.0 - 2.1 * occ, 0.0, 1.0);
+}
+
+// Filmic (ACES-ish) tone curve - keeps the ivory highlights from clipping
+// to flat white and gives the shadows a gentle roll-off.
+vec3 tonemap(vec3 x) {
+  const float a = 2.51, b = 0.03, c = 2.43, d = 0.59, e = 0.14;
+  return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
+}
+
+// Orbit-trap palette: a mineral specimen - pale ivory/bone on the smooth
+// outer lobes, oxidised verdigris and warm copper welling up in the folds
+// and creases where the orbit stayed close to the axes.
+vec3 shadeAlbedo(vec4 trap, float ao, vec3 p) {
+  vec3 verdigris = vec3(0.110, 0.440, 0.355);
+  vec3 copper    = vec3(0.680, 0.335, 0.130);
+  // paler bone/ivory (~#D9CBB0 at the pale end) so exposed convex lobes
+  // read as warm bone/ivory once lit, instead of settling into a muddy
+  // mid-grey - and reached over a wider range of "core" so more of the
+  // smooth surface gets there, not just the very centre of each lobe.
+  vec3 bone      = vec3(0.680, 0.620, 0.500);
+  vec3 ivory     = vec3(0.880, 0.800, 0.640);
+
+  // smooth outer lobes: bone through to bright ivory, varied a little by
+  // how deep the orbit dove during iteration (trap.w).
+  float core = clamp(trap.w * 2.3, 0.0, 1.0);
+  vec3 base = mix(bone, ivory, smoothstep(0.05, 0.6, core));
+
+  // crevices - detected from the orbit trap, which dips reliably wherever
+  // the surface folds toward the symmetry axes - pick up an oxidised
+  // patina. Which of copper or verdigris dominates a given fold is a slow
+  // spatial pattern over the surface point itself, deliberately decoupled
+  // from the fold detector so both colours appear as separate patches
+  // rather than one hue always winning where the patina actually shows.
+  float fold = 1.0 - smoothstep(0.0, 0.32, min(trap.x, trap.y));
+  float marble = sin(p.x * 5.0) * sin(p.y * 4.3 + 1.7) * sin(p.z * 6.1 + 0.4);
+  float hueMix = smoothstep(-0.2, 0.2, marble);
+  vec3 patina = mix(verdigris, copper, hueMix);
+  return mix(base, patina, fold * 0.72);
+}
+
+void main() {
+  vec2 uv = (gl_FragCoord.xy - 0.5 * uRes) / uRes.y;
+
+  vec3 fwd = normalize(uCamTarget - uCamPos);
+  vec3 right = normalize(cross(fwd, vec3(0.0, 1.0, 0.0)));
+  vec3 up = cross(right, fwd);
+  // uv spans roughly [-0.5, 0.5] vertically, so the focal length that maps
+  // that span to the requested vertical FOV is 0.5 / tan(fov/2), not 1/tan(fov/2).
+  // On a portrait/narrow canvas that alone would only fit the *vertical*
+  // extent and crop the sides, so the FOV is widened by the aspect ratio
+  // whenever width < height - the bulb then always fits the smaller side.
+  float fitScale = min(uRes.x / uRes.y, 1.0);
+  float focal = (0.5 / tan(uFov * 0.5)) * fitScale;
+  vec3 rd = normalize(uv.x * right + uv.y * up + focal * fwd);
+  vec3 ro = uCamPos;
+  float pixelAngle = 1.0 / (uRes.y * focal);
+
+  // background: a soft warm-to-cool pool of light - like a spotlight
+  // falling on black velvet - offset toward the key light, fading fast
+  // to near-black at the edges so the shell's dark UI reads cleanly on top.
+  // Normalized by the SHORTER side (not uRes.y) so the pool stays a
+  // compact, roughly circular glow on a tall/narrow phone canvas too -
+  // uv itself is stretched vertically there and would otherwise leave
+  // the "warm" zone covering almost the entire portrait screen.
+  vec2 uvBg = (gl_FragCoord.xy - 0.5 * uRes) / min(uRes.x, uRes.y);
+  vec2 poolCenter = vec2(-0.12, 0.10);
+  float rUV = length(uvBg - poolCenter);
+  vec3 bgWarm = vec3(0.075, 0.061, 0.046);
+  vec3 bgCool = vec3(0.013, 0.015, 0.023);
+  vec3 bgEdge = vec3(0.0020, 0.0023, 0.0035);
+  vec3 bg = mix(bgWarm, bgCool, smoothstep(0.0, 0.55, rUV));
+  bg = mix(bg, bgEdge, smoothstep(0.45, 1.15, rUV));
+
+  bool hit = false;
+  vec4 trap = vec4(1e5);
+  float glow = 0.0;
+  float t = 0.0;
+
+  // bounding-sphere early out: the bulb never strays past this radius, so
+  // rays that miss it entirely skip straight to the background.
+  const float BOUND = 1.3;
+  float b = dot(ro, rd);
+  float cq = dot(ro, ro) - BOUND * BOUND;
+  float h2 = b * b - cq;
+  if (h2 > 0.0) {
+    float sh = sqrt(h2);
+    t = max(-b - sh, 0.0);
+    float tFar = -b + sh;
+    for (int i = 0; i < 140; i++) {
+      if (t > tFar) break;
+      vec3 p = ro + rd * t;
+      vec4 tr;
+      float d = mandelbulbDE(p, uPower, tr);
+      glow += exp(-d * 34.0) * 0.045;
+      // epsilon scales with the ray's footprint (distance travelled times
+      // the angle one pixel subtends) so marching stops a fraction of a
+      // pixel from the true surface instead of chasing sub-pixel detail
+      // that would otherwise alias into stippled noise at low quality.
+      float hitEps = max(pixelAngle * t * 1.3, 0.0004);
+      if (d < hitEps) { hit = true; trap = tr; break; }
+      t += d * 0.92; // relaxed step: the DE overshoots slightly at high n
+    }
+  }
+
+  vec3 col = bg;
+  if (hit) {
+    vec3 p = ro + rd * t;
+    // the normal-estimation offset scales with the same ray footprint as
+    // hitEps, for the same reason: a fixed tiny offset resolves detail
+    // finer than a pixel can represent and reads back as speckle.
+    float nEps = clamp(pixelAngle * t * 1.0, 0.00015, 0.01);
+    vec3 n = calcNormal(p, uPower, nEps);
+    float ao = calcAO(p, n, uPower);
+    vec3 albedo = shadeAlbedo(trap, ao, p);
+
+    // key: one strong warm ~3200K spotlight from upper-left. This alone
+    // does most of the modelling - everything else is a supporting light.
+    vec3 lightDir = normalize(vec3(-0.55, 0.78, 0.30));
+    float diff = max(dot(n, lightDir), 0.0);
+    float shadow = softShadow(p + n * 0.003, lightDir, uPower);
+    vec3 keyColor = vec3(1.0, 0.78, 0.53); // ~3200K tungsten
+    // ~1.8x brighter than the first pass: lobes facing the key should be
+    // the brightest thing in frame, reading as warm ivory/bone, not grey.
+    vec3 key = keyColor * pow(diff, 1.4) * shadow * 2.3;
+
+    // fill: much weaker and cool - stands in for bounced light so the
+    // shadow side doesn't go pure flat; AO does the real darkening.
+    vec3 fillColor = vec3(0.026, 0.046, 0.082);
+    vec3 fill = fillColor * (0.5 + 0.5 * n.y);
+
+    // rim/back light: a cool edge light that brightens the silhouette as
+    // seen from the camera, independent of the key direction - contrasts
+    // with the warm key like a spotlight's rim falling into a dark room.
+    float rim = pow(1.0 - max(dot(n, -rd), 0.0), 3.0);
+    vec3 rimCol = vec3(0.42, 0.56, 0.60) * rim * 0.55;
+
+    // specular: Blinn-Phong (a tight core plus a softer, wider lobe) times
+    // a Schlick fresnel term - a cheap GGX-lite that gives the ivory a
+    // polished sheen that blooms a little at grazing angles, rather than a
+    // single hard plastic dot. Masked to the paler albedo so patina stays matte.
+    vec3 halfV = normalize(lightDir - rd);
+    float NoH = max(dot(n, halfV), 0.0);
+    float NoV = max(dot(n, -rd), 0.0);
+    float fres = 0.04 + 0.96 * pow(1.0 - NoV, 5.0);
+    float spec = (pow(NoH, 70.0) * 0.7 + pow(NoH, 16.0) * 0.3) * fres * shadow;
+    float albedoLum = dot(albedo, vec3(0.299, 0.587, 0.114));
+    float shineMask = smoothstep(0.22, 0.6, albedoLum);
+
+    vec3 lit = albedo * (key + fill * ao) + rimCol * ao
+             + vec3(1.0, 0.95, 0.88) * spec * shineMask * 0.9;
+
+    // ambient occlusion pushes deep folds toward near-black rather than
+    // flat grey - this is most of what makes the surface read as carved
+    // stone rather than a uniformly-lit blob, and gives the wide range
+    // from bright bone highlights down to near-black recesses.
+    vec3 shadowTint = vec3(0.009, 0.015, 0.030);
+    lit *= mix(shadowTint, vec3(1.0), pow(ao, 1.6));
+
+    col = mix(lit, bg, smoothstep(BOUND * 2.0, 9.0, t));
+  }
+
+  // faint atmospheric haze from near-miss rays - kept subtle so it reads as
+  // depth/fog rather than a glow outlining the whole silhouette.
+  vec3 glowColor = vec3(0.16, 0.32, 0.28);
+  col += glowColor * min(glow, 0.7) * 0.10;
+
+  col = tonemap(col * 1.0);
+  col = pow(max(col, 0.0), vec3(1.0 / 2.2));
+  col *= 1.0 - 0.30 * dot(uv, uv); // vignette
+  col += (hash21(gl_FragCoord.xy * 1.7 + 11.0) - 0.5) * 0.006; // de-band
+
+  fragColor = vec4(col, 1.0);
+}
+`;
+
+  function compileShader(gl, type, src) {
+    const sh = gl.createShader(type);
+    gl.shaderSource(sh, src);
+    gl.compileShader(sh);
+    if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
+      console.error('mandelbulb shader compile error:', gl.getShaderInfoLog(sh));
+      gl.deleteShader(sh);
+      return null;
+    }
+    return sh;
+  }
+
+  function buildProgram(gl) {
+    const vs = compileShader(gl, gl.VERTEX_SHADER, VERT_SRC);
+    const fs = compileShader(gl, gl.FRAGMENT_SHADER, FRAG_SRC);
+    if (!vs || !fs) return null;
+    const prog = gl.createProgram();
+    gl.attachShader(prog, vs);
+    gl.attachShader(prog, fs);
+    gl.linkProgram(prog);
+    gl.deleteShader(vs);
+    gl.deleteShader(fs);
+    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+      console.error('mandelbulb program link error:', gl.getProgramInfoLog(prog));
+      gl.deleteProgram(prog);
+      return null;
+    }
+    return prog;
+  }
+
+  SCENES.mandelbulb = {
+    id: 'mandelbulb',
+    name: 'Мандельбульб',
+    tagline: 'Трёхмерный фрактал: бесконечная деталь из одной строчки формулы',
+    about:
+      'Возьмите точку, возведите её в n-ю степень в сферических координатах и прибавьте исходную ' +
+      'точку — и повторяйте. Точки, которые не улетают в бесконечность, образуют эту минеральную ' +
+      'поверхность. Приблизьтесь — и деталей меньше не станет: показатель степени медленно ' +
+      'меняется, и в породе прорастают новые грани.',
+    spec: [
+      ['Формула', 'z ↦ zⁿ + c'],
+      ['Степень', 'n = 6…9, плавно'],
+      ['Итераций', '9'],
+      ['Оценка расстояния', '½·ln r · r / dr'],
+      ['Шагов луча', 'до 140'],
+      ['Освещение', 'мягкие тени, AO, орбитальные ловушки']
+    ],
+    hint: 'Тяните — вращение · колесо или щипок — зум',
+    accent: '#C68A56',
+
+    mount(host, ui) {
+      const canvas = document.createElement('canvas');
+      canvas.style.display = 'block';
+      canvas.style.width = '100%';
+      canvas.style.height = '100%';
+      canvas.style.touchAction = 'none';
+      host.appendChild(canvas);
+
+      const gl = canvas.getContext('webgl2');
+      if (!gl) {
+        const div = document.createElement('div');
+        div.className = 'scene-fallback';
+        div.textContent = 'Для этой сцены нужен WebGL2 — откройте страницу в свежем Chrome, Firefox или Safari.';
+        host.appendChild(div);
+        return {
+          unmount() {
+            host.removeChild(div);
+            host.removeChild(canvas);
+          }
+        };
+      }
+
+      const program = buildProgram(gl);
+      let raf = 0;
+      let disposed = false;
+
+      // -- geometry: one full-screen triangle -----------------------------
+      const vbo = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+      const vao = gl.createVertexArray();
+      gl.bindVertexArray(vao);
+      gl.enableVertexAttribArray(0);
+      gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+      gl.bindVertexArray(null);
+
+      const uniforms = {};
+      if (program) {
+        ['uRes', 'uTime', 'uPower', 'uCamPos', 'uCamTarget', 'uFov'].forEach((name) => {
+          uniforms[name] = gl.getUniformLocation(program, name);
+        });
+      }
+
+      // -- camera state -----------------------------------------------------
+      const DEFAULTS = { azimuth: 0.6, elevation: 0.22, zoom: 1.0 };
+      let azimuth = DEFAULTS.azimuth;
+      let elevation = DEFAULTS.elevation;
+      let zoomTarget = DEFAULTS.zoom;
+      let zoom = DEFAULTS.zoom; // damped toward zoomTarget each frame
+      let lastInteract = -999;
+
+      // -- toggles ------------------------------------------------------
+      let morphing = true;
+      let paused = false;
+      let power = 8.0;
+
+      // -- adaptive quality (contract: heavy ray-marcher starts at 0.5) ---
+      const fixedQ = host.dataset.fixedQuality ? parseFloat(host.dataset.fixedQuality) : null;
+      let quality = fixedQ != null && !Number.isNaN(fixedQ) ? fixedQ : 0.5;
+      let frameTimeSum = 0;
+      let frameTimeCount = 0;
+
+      function resize() {
+        const dpr = Math.min(window.devicePixelRatio || 1, 2);
+        const w = Math.max(1, Math.round(host.clientWidth * dpr * quality));
+        const h = Math.max(1, Math.round(host.clientHeight * dpr * quality));
+        if (canvas.width !== w || canvas.height !== h) {
+          canvas.width = w;
+          canvas.height = h;
+        }
+      }
+      resize();
+      const ro = new ResizeObserver(() => resize());
+      ro.observe(host);
+
+      // -- pointer input: drag to rotate, wheel / pinch to zoom -----------
+      const pointers = new Map();
+      let pinchStartDist = 0;
+      let pinchStartZoom = 1;
+      // release inertia: a single-finger drag leaves behind an angular
+      // velocity (rad/s) that keeps spinning the view and decays away.
+      let velAzimuth = 0;
+      let velElevation = 0;
+      let lastMoveTime = 0;
+
+      function pointerDist() {
+        const pts = Array.from(pointers.values());
+        const dx = pts[0].x - pts[1].x;
+        const dy = pts[0].y - pts[1].y;
+        return Math.hypot(dx, dy);
+      }
+
+      function onPointerDown(e) {
+        canvas.setPointerCapture(e.pointerId);
+        pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        lastInteract = performance.now() / 1000;
+        lastMoveTime = lastInteract;
+        // grabbing the view again cancels any fling still playing out
+        velAzimuth = 0;
+        velElevation = 0;
+        if (pointers.size === 2) {
+          pinchStartDist = pointerDist();
+          pinchStartZoom = zoomTarget;
+        }
+      }
+      function onPointerMove(e) {
+        const pt = pointers.get(e.pointerId);
+        if (!pt) return;
+        const dx = e.clientX - pt.x;
+        const dy = e.clientY - pt.y;
+        const now = performance.now() / 1000;
+        lastInteract = now;
+        if (pointers.size === 1) {
+          const dAz = -dx * 0.0055;
+          const dEl = -dy * 0.0055;
+          azimuth += dAz;
+          elevation = Math.max(-1.3, Math.min(1.3, elevation + dEl));
+          // instantaneous drag speed, smoothed a little, becomes the fling
+          // velocity carried into the release-inertia phase below. Clamped
+          // so a very short dtMove (e.g. two synthetic events fired back
+          // to back) can't produce an absurd speed that takes far longer
+          // than intended to decay away.
+          const dtMove = Math.max(1 / 240, now - lastMoveTime);
+          velAzimuth = clamp(velAzimuth + (dAz / dtMove - velAzimuth) * 0.6, -9, 9);
+          velElevation = clamp(velElevation + (dEl / dtMove - velElevation) * 0.6, -9, 9);
+          lastMoveTime = now;
+          pt.x = e.clientX;
+          pt.y = e.clientY;
+        } else if (pointers.size === 2) {
+          pt.x = e.clientX;
+          pt.y = e.clientY;
+          const d = pointerDist();
+          if (pinchStartDist > 1) {
+            zoomTarget = clamp(pinchStartZoom * (pinchStartDist / Math.max(d, 1)), 0.45, 2.4);
+          }
+        }
+      }
+      function onPointerUp(e) {
+        pointers.delete(e.pointerId);
+        if (pointers.size < 2) { pinchStartDist = 0; }
+        lastInteract = performance.now() / 1000;
+      }
+      function onWheel(e) {
+        e.preventDefault();
+        zoomTarget = clamp(zoomTarget * Math.exp(e.deltaY * 0.0011), 0.45, 2.4);
+        lastInteract = performance.now() / 1000;
+      }
+      function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+
+      canvas.addEventListener('pointerdown', onPointerDown);
+      canvas.addEventListener('pointermove', onPointerMove);
+      canvas.addEventListener('pointerup', onPointerUp);
+      canvas.addEventListener('pointercancel', onPointerUp);
+      canvas.addEventListener('wheel', onWheel, { passive: false });
+
+      // -- controls ---------------------------------------------------------
+      const btnMorph = document.createElement('button');
+      btnMorph.type = 'button';
+      btnMorph.className = 'ctl';
+      btnMorph.textContent = 'Морфинг';
+      btnMorph.setAttribute('aria-pressed', 'true');
+      btnMorph.addEventListener('click', () => {
+        morphing = !morphing;
+        btnMorph.setAttribute('aria-pressed', String(morphing));
+      });
+
+      const btnPause = document.createElement('button');
+      btnPause.type = 'button';
+      btnPause.className = 'ctl';
+      btnPause.textContent = 'Пауза';
+      btnPause.setAttribute('aria-pressed', 'false');
+      btnPause.addEventListener('click', () => togglePause());
+
+      const btnReset = document.createElement('button');
+      btnReset.type = 'button';
+      btnReset.className = 'ctl';
+      btnReset.textContent = 'Сброс';
+      btnReset.addEventListener('click', () => reset());
+
+      ui.appendChild(btnMorph);
+      ui.appendChild(btnPause);
+      ui.appendChild(btnReset);
+
+      function togglePause() {
+        paused = !paused;
+        btnPause.setAttribute('aria-pressed', String(paused));
+      }
+      function reset() {
+        azimuth = DEFAULTS.azimuth;
+        elevation = DEFAULTS.elevation;
+        zoomTarget = DEFAULTS.zoom;
+        zoom = DEFAULTS.zoom;
+        simTime = 0;
+        paused = false;
+        btnPause.setAttribute('aria-pressed', 'false');
+      }
+
+      function onKeyDown(e) {
+        const target = e.target;
+        if (target && (target.tagName === 'INPUT' || target.tagName === 'BUTTON')) return;
+        if (e.code === 'Space') { e.preventDefault(); togglePause(); }
+        else if (e.code === 'KeyR') { reset(); }
+      }
+      window.addEventListener('keydown', onKeyDown);
+
+      // -- animation loop -----------------------------------------------
+      const reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)');
+      let simTime = 0;
+      let last = performance.now() / 1000;
+
+      function frame(now) {
+        raf = requestAnimationFrame(frame);
+        const t0 = performance.now();
+        const nowS = t0 / 1000;
+        const dt = Math.min(0.05, nowS - last);
+        last = nowS;
+        if (!paused) simTime += dt;
+
+        // fractal breathing: power drifts between ~6 and ~9, or eases to
+        // exactly 8 when morphing is frozen off.
+        if (morphing) {
+          power = 7.5 + 1.5 * Math.sin(simTime * 0.08);
+        } else {
+          power += (8.0 - power) * Math.min(1, dt * 1.5);
+        }
+
+        // release inertia: while no finger is on the canvas, spend down the
+        // velocity left over from the last drag - an exponential decay
+        // with a ~0.2s time constant, i.e. essentially stopped by ~0.6s.
+        if (pointers.size === 0 && !paused && (Math.abs(velAzimuth) > 1e-4 || Math.abs(velElevation) > 1e-4)) {
+          azimuth += velAzimuth * dt;
+          elevation = Math.max(-1.3, Math.min(1.3, elevation + velElevation * dt));
+          const decay = Math.exp(-dt * 5.0);
+          velAzimuth *= decay;
+          velElevation *= decay;
+        }
+
+        const motionScale = reduceMotion && reduceMotion.matches ? 0.35 : 1.0;
+        const idle = nowS - lastInteract > 4.0;
+        if (idle && !paused) {
+          azimuth += 0.028 * motionScale * dt;
+          const elevTarget = 0.20 * Math.sin(simTime * 0.037);
+          elevation += (elevTarget - elevation) * Math.min(1, dt * 0.5);
+        }
+        // damp the user's zoom toward its target so wheel/pinch input eases
+        // in rather than snapping the camera distance in one frame.
+        zoom += (zoomTarget - zoom) * Math.min(1, dt * 8);
+
+        // orbit distance breathes slowly between a full-specimen view (bulb
+        // filling ~60% of the shorter side) and a close pass where the
+        // surface fills most of the frame and fine detail shows; zoom
+        // scales on top. The lower safety clamp keeps the camera from ever
+        // punching through the bounding sphere even at maximum pinch-in.
+        const distBreathe = 2.6 + 1.6 * (0.5 + 0.5 * Math.sin(simTime * 0.05 * motionScale + 1.3));
+        const distance = clamp(distBreathe * zoom, 1.7, 9.0);
+
+        const camTarget = [0, 0, 0];
+        const camPos = [
+          distance * Math.cos(elevation) * Math.sin(azimuth),
+          distance * Math.sin(elevation),
+          distance * Math.cos(elevation) * Math.cos(azimuth)
+        ];
+
+        if (program) {
+          gl.viewport(0, 0, canvas.width, canvas.height);
+          gl.useProgram(program);
+          gl.bindVertexArray(vao);
+          gl.uniform2f(uniforms.uRes, canvas.width, canvas.height);
+          gl.uniform1f(uniforms.uTime, simTime);
+          gl.uniform1f(uniforms.uPower, power);
+          gl.uniform3f(uniforms.uCamPos, camPos[0], camPos[1], camPos[2]);
+          gl.uniform3f(uniforms.uCamTarget, camTarget[0], camTarget[1], camTarget[2]);
+          gl.uniform1f(uniforms.uFov, 38 * Math.PI / 180);
+          gl.drawArrays(gl.TRIANGLES, 0, 3);
+          gl.bindVertexArray(null);
+        }
+
+        if (fixedQ == null) {
+          const ft = performance.now() - t0;
+          frameTimeSum += ft;
+          frameTimeCount++;
+          if (frameTimeCount >= 30) {
+            const avg = frameTimeSum / frameTimeCount;
+            if (avg > 22) quality = Math.max(0.3, quality * 0.85);
+            else if (avg < 12) quality = Math.min(1, quality * 1.1);
+            frameTimeSum = 0;
+            frameTimeCount = 0;
+            resize();
+          }
+        }
+      }
+      raf = requestAnimationFrame(frame);
+
+      return {
+        unmount() {
+          if (disposed) return;
+          disposed = true;
+          cancelAnimationFrame(raf);
+          ro.disconnect();
+          canvas.removeEventListener('pointerdown', onPointerDown);
+          canvas.removeEventListener('pointermove', onPointerMove);
+          canvas.removeEventListener('pointerup', onPointerUp);
+          canvas.removeEventListener('pointercancel', onPointerUp);
+          canvas.removeEventListener('wheel', onWheel);
+          window.removeEventListener('keydown', onKeyDown);
+          if (program) gl.deleteProgram(program);
+          gl.deleteBuffer(vbo);
+          gl.deleteVertexArray(vao);
+          gl.getExtension('WEBGL_lose_context')?.loseContext();
+          host.removeChild(canvas);
+          ui.innerHTML = '';
+        }
+      };
+    }
+  };
+})();
+
+</script>
+<script>
+/* оболочка: shell.js */
+/*
+  «Три невозможные вещи» — shell.
+  Mounts/unmounts scenes from window.SCENES, drives the overlay chrome,
+  keyboard shortcuts, fullscreen, hidden-UI mode and the #hash deep link.
+  Dependency-free, defensive: a scene that throws never takes the page down.
+*/
+(function () {
+  'use strict';
+
+  var SCENE_ORDER = ['gargantua', 'lenia', 'mandelbulb'];
+  var ROMAN = { gargantua: 'I', lenia: 'II', mandelbulb: 'III' };
+  var DEFAULT_SCENE = 'gargantua';
+  var DEFAULT_ACCENT = '#f2b880';
+  var VEIL_MS = 350;
+  var FADE_MS = 180;
+
+  var reduceMotion = false;
+  var transitioning = false;
+  var uiHidden = false;
+  var current = null; // { id, def, handle }
+
+  // DOM refs, filled in on boot.
+  var stage, veil, chrome_, sceneUi;
+  var btnHide, btnFullscreen, btnShow;
+  var infoPanel, infoToggle, infoDetails;
+  var sceneIndexEl, sceneNameEl, sceneTaglineEl, sceneAboutEl, sceneSpecEl, sceneHintEl;
+  var switchButtons;
+
+  function $(id) {
+    return document.getElementById(id);
+  }
+
+  function availableScenes() {
+    var s = window.SCENES || {};
+    return SCENE_ORDER.filter(function (id) {
+      return !!s[id];
+    });
+  }
+
+  function isFormTarget(el) {
+    if (!el) return false;
+    var tag = el.tagName;
+    return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable;
+  }
+
+  function idFromHash() {
+    var h = (location.hash || '').replace('#', '');
+    return SCENE_ORDER.indexOf(h) !== -1 ? h : null;
+  }
+
+  function renderSpec(pairs) {
+    sceneSpecEl.innerHTML = '';
+    (pairs || []).forEach(function (pair) {
+      var dt = document.createElement('dt');
+      dt.textContent = pair[0];
+      var dd = document.createElement('dd');
+      dd.textContent = pair[1];
+      sceneSpecEl.appendChild(dt);
+      sceneSpecEl.appendChild(dd);
+    });
+  }
+
+  function updateSwitcherState(id) {
+    switchButtons.forEach(function (btn) {
+      var isCurrent = btn.getAttribute('data-scene') === id;
+      btn.setAttribute('aria-current', isCurrent ? 'true' : 'false');
+    });
+  }
+
+  function fillInfoPanel(def) {
+    sceneIndexEl.textContent = ROMAN[def.id] || '';
+    sceneNameEl.textContent = def.name || '';
+    sceneTaglineEl.textContent = def.tagline || '';
+    sceneAboutEl.textContent = def.about || '';
+    renderSpec(def.spec);
+    sceneHintEl.textContent = def.hint || '';
+  }
+
+  function updateInfoPanel(def) {
+    if (reduceMotion) {
+      fillInfoPanel(def);
+      return;
+    }
+    infoPanel.classList.add('is-fading');
+    window.setTimeout(function () {
+      fillInfoPanel(def);
+      infoPanel.classList.remove('is-fading');
+    }, FADE_MS);
+  }
+
+  function showFallback(message) {
+    stage.innerHTML = '';
+    var fb = document.createElement('div');
+    fb.className = 'scene-fallback';
+    fb.textContent = message;
+    stage.appendChild(fb);
+  }
+
+  // Unmounts the current scene (if any), mounts `id`, updates chrome. No veil.
+  function performSwitch(id) {
+    var def = (window.SCENES || {})[id];
+    if (!def) return;
+
+    if (current && current.handle) {
+      try {
+        current.handle.unmount();
+      } catch (err) {
+        console.error('[shell] unmount error for ' + current.id, err);
+      }
+    }
+
+    stage.innerHTML = '';
+    sceneUi.innerHTML = '';
+
+    var handle = null;
+    try {
+      handle = def.mount(stage, sceneUi) || null;
+    } catch (err) {
+      console.error('[shell] mount error for ' + id, err);
+      showFallback('Сцена «' + (def.name || id) + '» сейчас не может запуститься. Попробуйте обновить страницу.');
+      handle = null;
+    }
+
+    current = { id: id, def: def, handle: handle };
+    updateInfoPanel(def);
+    updateSwitcherState(id);
+    document.documentElement.style.setProperty('--accent', def.accent || DEFAULT_ACCENT);
+    try {
+      history.replaceState(null, '', '#' + id);
+    } catch (err) {
+      /* ignore — e.g. sandboxed file:// edge cases */
+    }
+  }
+
+  function switchTo(id) {
+    if (transitioning) return;
+    if (!window.SCENES || !window.SCENES[id]) return;
+    if (current && current.id === id) return;
+
+    if (reduceMotion) {
+      performSwitch(id);
+      return;
+    }
+
+    transitioning = true;
+    veil.classList.add('is-visible');
+    window.setTimeout(function () {
+      performSwitch(id);
+      // Let the fresh DOM paint once before fading the veil back out.
+      requestAnimationFrame(function () {
+        veil.classList.remove('is-visible');
+        window.setTimeout(function () {
+          transitioning = false;
+        }, VEIL_MS);
+      });
+    }, VEIL_MS);
+  }
+
+  function stepScene(delta) {
+    var scenes = availableScenes();
+    if (!scenes.length) return;
+    var idx = current ? scenes.indexOf(current.id) : -1;
+    if (idx === -1) idx = 0;
+    var next = (idx + delta + scenes.length) % scenes.length;
+    switchTo(scenes[next]);
+  }
+
+  // ---------- hidden-UI mode ----------
+
+  function setUiHidden(hidden) {
+    uiHidden = hidden;
+    chrome_.classList.toggle('is-hidden', hidden);
+    chrome_.setAttribute('aria-hidden', hidden ? 'true' : 'false');
+    btnHide.setAttribute('aria-pressed', hidden ? 'true' : 'false');
+    btnShow.hidden = !hidden;
+  }
+
+  function toggleUiHidden() {
+    setUiHidden(!uiHidden);
+  }
+
+  // ---------- fullscreen ----------
+
+  function fullscreenSupported() {
+    return !!(document.documentElement.requestFullscreen && document.exitFullscreen);
+  }
+
+  function toggleFullscreen() {
+    if (!fullscreenSupported()) return;
+    if (!document.fullscreenElement) {
+      var p = document.documentElement.requestFullscreen();
+      if (p && p.catch) p.catch(function () {});
+    } else {
+      var p2 = document.exitFullscreen();
+      if (p2 && p2.catch) p2.catch(function () {});
+    }
+  }
+
+  function onFullscreenChange() {
+    btnFullscreen.setAttribute('aria-pressed', document.fullscreenElement ? 'true' : 'false');
+  }
+
+  // ---------- mobile info toggle ----------
+
+  function setInfoExpanded(expanded) {
+    infoToggle.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+    infoToggle.textContent = expanded ? 'Свернуть' : 'Подробнее';
+    infoPanel.classList.toggle('is-expanded', expanded);
+  }
+
+  function toggleInfoExpanded() {
+    setInfoExpanded(infoToggle.getAttribute('aria-expanded') !== 'true');
+  }
+
+  // ---------- keyboard ----------
+
+  function onKeydown(e) {
+    if (e.defaultPrevented) return;
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    if (isFormTarget(e.target)) return;
+
+    switch (e.code) {
+      case 'Digit1':
+        switchTo(SCENE_ORDER[0]);
+        break;
+      case 'Digit2':
+        switchTo(SCENE_ORDER[1]);
+        break;
+      case 'Digit3':
+        switchTo(SCENE_ORDER[2]);
+        break;
+      case 'ArrowLeft':
+        stepScene(-1);
+        break;
+      case 'ArrowRight':
+        stepScene(1);
+        break;
+      case 'KeyH':
+        toggleUiHidden();
+        break;
+      case 'KeyF':
+        toggleFullscreen();
+        break;
+      case 'Escape':
+        if (uiHidden) {
+          setUiHidden(false);
+        } else if (infoToggle.getAttribute('aria-expanded') === 'true') {
+          setInfoExpanded(false);
+        }
+        break;
+      default:
+        return;
+    }
+  }
+
+  // ---------- boot ----------
+
+  function cacheDom() {
+    stage = $('stage');
+    veil = $('veil');
+    chrome_ = $('chrome');
+    sceneUi = $('scene-ui');
+    btnHide = $('btn-hide');
+    btnFullscreen = $('btn-fullscreen');
+    btnShow = $('btn-show');
+    infoPanel = $('info-panel');
+    infoToggle = $('info-toggle');
+    infoDetails = $('info-details');
+    sceneIndexEl = $('scene-index');
+    sceneNameEl = $('scene-name');
+    sceneTaglineEl = $('scene-tagline');
+    sceneAboutEl = $('scene-about');
+    sceneSpecEl = $('scene-spec');
+    sceneHintEl = $('scene-hint');
+    switchButtons = Array.prototype.slice.call(document.querySelectorAll('.switch-btn'));
+  }
+
+  function wireEvents() {
+    btnHide.addEventListener('click', toggleUiHidden);
+    btnShow.addEventListener('click', toggleUiHidden);
+
+    if (fullscreenSupported()) {
+      btnFullscreen.addEventListener('click', toggleFullscreen);
+      document.addEventListener('fullscreenchange', onFullscreenChange);
+    } else {
+      btnFullscreen.hidden = true;
+    }
+
+    infoToggle.addEventListener('click', toggleInfoExpanded);
+
+    switchButtons.forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        switchTo(btn.getAttribute('data-scene'));
+      });
+    });
+
+    document.addEventListener('keydown', onKeydown);
+  }
+
+  // Dev/test hook only: a `?q=0.35`-style query param pins scene quality so
+  // screenshots taken under a slow software GPU are deterministic. Scenes
+  // read `host.dataset.fixedQuality` themselves (see CONTRACT.md); normal
+  // visitors never pass this param, so this is a no-op for them.
+  function applyFixedQualityFromQuery() {
+    try {
+      var params = new URLSearchParams(location.search);
+      var q = params.get('q');
+      if (q) stage.dataset.fixedQuality = q;
+    } catch (err) {
+      /* ignore — malformed query string or no URLSearchParams support */
+    }
+  }
+
+  function boot() {
+    cacheDom();
+    wireEvents();
+    applyFixedQualityFromQuery();
+
+    try {
+      reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    } catch (err) {
+      reduceMotion = false;
+    }
+
+    var scenes = availableScenes();
+
+    switchButtons.forEach(function (btn) {
+      var id = btn.getAttribute('data-scene');
+      btn.hidden = scenes.indexOf(id) === -1;
+    });
+
+    if (!scenes.length) {
+      showFallback('Сцены не найдены. Проверьте, что файлы src/scenes/*.js подключены.');
+      return;
+    }
+
+    var initial = idFromHash();
+    if (!initial || scenes.indexOf(initial) === -1) {
+      initial = scenes.indexOf(DEFAULT_SCENE) !== -1 ? DEFAULT_SCENE : scenes[0];
+    }
+
+    performSwitch(initial);
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', boot);
+  } else {
+    boot();
+  }
+})();
+
+</script>
+</body>
+</html>

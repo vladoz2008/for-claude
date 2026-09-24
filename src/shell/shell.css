@@ -322,7 +322,7 @@ button {
 
 .scene-tagline {
   margin: 10px 0 0;
-  max-width: 52ch;
+  max-width: 40ch;
   color: var(--dim);
   font-size: clamp(13px, 1.3vw, 15px);
   line-height: 1.5;
@@ -342,7 +342,7 @@ button {
 
 .scene-about {
   margin: 0;
-  max-width: 46ch;
+  max-width: 38ch;
   color: var(--ink);
   opacity: 0.86;
   font-size: 14px;
@@ -352,10 +352,13 @@ button {
 .scene-spec {
   margin: 0;
   display: grid;
-  grid-template-columns: max-content max-content;
+  /* minmax(0, 1fr) lets a long value (e.g. Lenia's world-size description)
+     wrap inside the panel's own width instead of stretching the max-content
+     column past it and pushing the whole grid further into the scene. */
+  grid-template-columns: max-content minmax(0, 1fr);
   column-gap: 18px;
   row-gap: 6px;
-  max-width: 46ch;
+  max-width: 38ch;
   padding-top: 12px;
   border-top: 1px solid var(--hair);
 }
@@ -390,6 +393,11 @@ button {
 /* text crossfade on scene switch */
 .info-fade-target {
   transition: opacity var(--fade-ms) ease;
+  /* The camera in every scene is user-navigable, so the bright disk/rock/
+     creatures can drift under this text at any orientation — a soft dark
+     halo (not just a narrower column) is what keeps it legible no matter
+     where the scene's brightest pixels end up. */
+  text-shadow: 0 1px 3px rgba(2, 2, 4, 0.75), 0 4px 18px rgba(2, 2, 4, 0.45);
 }
 
 .info-panel.is-fading .info-fade-target {
@@ -615,6 +623,11 @@ button {
     flex: 1 1 0;
     height: 40px;
     justify-content: center;
+    /* .switch-num is hidden below, leaving .switch-name as the sole flex
+       item — baseline alignment (the desktop default, which lines up the
+       numeral and name nicely) then has nothing to align against and
+       floats the text toward the top of the pill. Re-center it. */
+    align-items: center;
     padding: 0 4px;
   }
 

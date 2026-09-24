@@ -297,9 +297,24 @@
     document.addEventListener('keydown', onKeydown);
   }
 
+  // Dev/test hook only: a `?q=0.35`-style query param pins scene quality so
+  // screenshots taken under a slow software GPU are deterministic. Scenes
+  // read `host.dataset.fixedQuality` themselves (see CONTRACT.md); normal
+  // visitors never pass this param, so this is a no-op for them.
+  function applyFixedQualityFromQuery() {
+    try {
+      var params = new URLSearchParams(location.search);
+      var q = params.get('q');
+      if (q) stage.dataset.fixedQuality = q;
+    } catch (err) {
+      /* ignore — malformed query string or no URLSearchParams support */
+    }
+  }
+
   function boot() {
     cacheDom();
     wireEvents();
+    applyFixedQualityFromQuery();
 
     try {
       reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
