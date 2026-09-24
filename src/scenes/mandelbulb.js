@@ -26,8 +26,8 @@ uniform vec3  uCamTarget;
 uniform float uFov;
 out vec4 fragColor;
 
-// cheap 2D hash, used for a sub-pixel jitter (poor-man's AA) and to
-// dither the dark background so smooth gradients don't band.
+// cheap 2D hash, used to dither the dark background so its smooth
+// gradient doesn't band.
 float hash21(vec2 p) {
   p = fract(p * vec2(123.34, 456.21));
   p += dot(p, p + 45.32);
@@ -67,8 +67,7 @@ float mandelbulbDE(vec3 p, float power, out vec4 trap) {
   return 0.5 * log(r) * r / dr;
 }
 
-vec3 calcNormal(vec3 p, float power) {
-  const float e = 0.0006;
+vec3 calcNormal(vec3 p, float power, float e) {
   vec4 tr;
   vec2 k = vec2(1.0, -1.0);
   return normalize(
@@ -108,7 +107,7 @@ float calcAO(vec3 p, vec3 n, float power) {
     occ += (h - d) * sca;
     sca *= 0.7;
   }
-  return clamp(1.0 - 1.5 * occ, 0.0, 1.0);
+  return clamp(1.0 - 2.1 * occ, 0.0, 1.0);
 }
 
 // Filmic (ACES-ish) tone curve - keeps the ivory highlights from clipping
@@ -147,10 +146,6 @@ vec3 shadeAlbedo(vec4 trap, float ao, vec3 p) {
 
 void main() {
   vec2 uv = (gl_FragCoord.xy - 0.5 * uRes) / uRes.y;
-  // tiny per-pixel, per-frame jitter: softens staircasing on the silhouette
-  // once the canvas is bilinearly upscaled to CSS size.
-  float j = hash21(gl_FragCoord.xy + uTime * 61.0);
-  uv += (j - 0.5) * (1.0 / uRes.y);
 
   vec3 fwd = normalize(uCamTarget - uCamPos);
   vec3 right = normalize(cross(fwd, vec3(0.0, 1.0, 0.0)));
@@ -166,9 +161,21 @@ void main() {
   vec3 ro = uCamPos;
   float pixelAngle = 1.0 / (uRes.y * focal);
 
-  // subtle radial gradient behind everything, plus room for glow to build on
-  vec3 bg = mix(vec3(0.035, 0.039, 0.052), vec3(0.006, 0.007, 0.012),
-                 smoothstep(0.0, 1.15, length(uv)));
+  // background: a soft warm-to-cool pool of light - like a spotlight
+  // falling on black velvet - offset toward the key light, fading fast
+  // to near-black at the edges so the shell's dark UI reads cleanly on top.
+  // Normalized by the SHORTER side (not uRes.y) so the pool stays a
+  // compact, roughly circular glow on a tall/narrow phone canvas too -
+  // uv itself is stretched vertically there and would otherwise leave
+  // the "warm" zone covering almost the entire portrait screen.
+  vec2 uvBg = (gl_FragCoord.xy - 0.5 * uRes) / min(uRes.x, uRes.y);
+  vec2 poolCenter = vec2(-0.12, 0.10);
+  float rUV = length(uvBg - poolCenter);
+  vec3 bgWarm = vec3(0.075, 0.061, 0.046);
+  vec3 bgCool = vec3(0.013, 0.015, 0.023);
+  vec3 bgEdge = vec3(0.0020, 0.0023, 0.0035);
+  vec3 bg = mix(bgWarm, bgCool, smoothstep(0.0, 0.55, rUV));
+  bg = mix(bg, bgEdge, smoothstep(0.45, 1.15, rUV));
 
   bool hit = false;
   vec4 trap = vec4(1e5);
@@ -177,7 +184,7 @@ void main() {
 
   // bounding-sphere early out: the bulb never strays past this radius, so
   // rays that miss it entirely skip straight to the background.
-  const float BOUND = 1.25;
+  const float BOUND = 1.3;
   float b = dot(ro, rd);
   float cq = dot(ro, ro) - BOUND * BOUND;
   float h2 = b * b - cq;
@@ -191,7 +198,11 @@ void main() {
       vec4 tr;
       float d = mandelbulbDE(p, uPower, tr);
       glow += exp(-d * 34.0) * 0.045;
-      float hitEps = max(pixelAngle * t * 0.6, 0.0006);
+      // epsilon scales with the ray's footprint (distance travelled times
+      // the angle one pixel subtends) so marching stops a fraction of a
+      // pixel from the true surface instead of chasing sub-pixel detail
+      // that would otherwise alias into stippled noise at low quality.
+      float hitEps = max(pixelAngle * t * 1.3, 0.0004);
       if (d < hitEps) { hit = true; trap = tr; break; }
       t += d * 0.92; // relaxed step: the DE overshoots slightly at high n
     }
@@ -200,30 +211,54 @@ void main() {
   vec3 col = bg;
   if (hit) {
     vec3 p = ro + rd * t;
-    vec3 n = calcNormal(p, uPower);
+    // the normal-estimation offset scales with the same ray footprint as
+    // hitEps, for the same reason: a fixed tiny offset resolves detail
+    // finer than a pixel can represent and reads back as speckle.
+    float nEps = clamp(pixelAngle * t * 1.0, 0.00015, 0.01);
+    vec3 n = calcNormal(p, uPower, nEps);
     float ao = calcAO(p, n, uPower);
     vec3 albedo = shadeAlbedo(trap, ao, p);
 
-    // a raking, slightly side-on key light carves a clear light/dark
-    // terminator across the lobes instead of a flat, evenly-lit blob.
-    vec3 lightDir = normalize(vec3(0.30, 0.70, 0.55));
+    // key: one strong warm ~3200K spotlight from upper-left. This alone
+    // does most of the modelling - everything else is a supporting light.
+    vec3 lightDir = normalize(vec3(-0.55, 0.78, 0.30));
     float diff = max(dot(n, lightDir), 0.0);
-    float shadow = softShadow(p + n * 0.0025, lightDir, uPower);
+    float shadow = softShadow(p + n * 0.003, lightDir, uPower);
+    vec3 keyColor = vec3(1.0, 0.78, 0.53); // ~3200K tungsten
+    vec3 key = keyColor * pow(diff, 1.4) * shadow * 1.3;
 
-    vec3 halfV = normalize(lightDir - rd);
-    float spec = pow(max(dot(n, halfV), 0.0), 34.0) * shadow;
+    // fill: much weaker and cool - stands in for bounced light so the
+    // shadow side doesn't go pure flat; AO does the real darkening.
+    vec3 fillColor = vec3(0.026, 0.046, 0.082);
+    vec3 fill = fillColor * (0.5 + 0.5 * n.y);
 
-    vec3 key = vec3(1.0, 0.96, 0.88) * pow(diff, 1.3) * shadow;
-    vec3 fill = vec3(0.045, 0.07, 0.10) * (0.5 + 0.5 * n.y) * ao;
+    // rim/back light: a cool edge light that brightens the silhouette as
+    // seen from the camera, independent of the key direction - contrasts
+    // with the warm key like a spotlight's rim falling into a dark room.
     float rim = pow(1.0 - max(dot(n, -rd), 0.0), 3.0);
-    vec3 rimCol = vec3(0.28, 0.55, 0.47) * rim * 0.4 * ao;
+    vec3 rimCol = vec3(0.42, 0.56, 0.60) * rim * 0.55;
 
-    vec3 lit = albedo * (key * 1.05 + fill) + rimCol + vec3(1.0, 0.97, 0.9) * spec * 0.4;
+    // specular: Blinn-Phong (a tight core plus a softer, wider lobe) times
+    // a Schlick fresnel term - a cheap GGX-lite that gives the ivory a
+    // polished sheen that blooms a little at grazing angles, rather than a
+    // single hard plastic dot. Masked to the paler albedo so patina stays matte.
+    vec3 halfV = normalize(lightDir - rd);
+    float NoH = max(dot(n, halfV), 0.0);
+    float NoV = max(dot(n, -rd), 0.0);
+    float fres = 0.04 + 0.96 * pow(1.0 - NoV, 5.0);
+    float spec = (pow(NoH, 70.0) * 0.7 + pow(NoH, 16.0) * 0.3) * fres * shadow;
+    float albedoLum = dot(albedo, vec3(0.299, 0.587, 0.114));
+    float shineMask = smoothstep(0.22, 0.6, albedoLum);
 
-    // deep, occluded folds go toward blue-black rather than flat grey -
-    // this is what reads as "shadow" on a mineral specimen rather than haze.
-    vec3 shadowTint = vec3(0.02, 0.035, 0.07);
-    lit *= mix(shadowTint, vec3(1.0), pow(ao, 1.15));
+    vec3 lit = albedo * (key + fill * ao) + rimCol * ao
+             + vec3(1.0, 0.95, 0.88) * spec * shineMask * 0.9;
+
+    // ambient occlusion pushes deep folds toward near-black rather than
+    // flat grey - this is most of what makes the surface read as carved
+    // stone rather than a uniformly-lit blob, and gives the wide range
+    // from bright bone highlights down to near-black recesses.
+    vec3 shadowTint = vec3(0.009, 0.015, 0.030);
+    lit *= mix(shadowTint, vec3(1.0), pow(ao, 1.6));
 
     col = mix(lit, bg, smoothstep(BOUND * 2.0, 9.0, t));
   }
@@ -371,6 +406,11 @@ void main() {
       const pointers = new Map();
       let pinchStartDist = 0;
       let pinchStartZoom = 1;
+      // release inertia: a single-finger drag leaves behind an angular
+      // velocity (rad/s) that keeps spinning the view and decays away.
+      let velAzimuth = 0;
+      let velElevation = 0;
+      let lastMoveTime = 0;
 
       function pointerDist() {
         const pts = Array.from(pointers.values());
@@ -383,6 +423,10 @@ void main() {
         canvas.setPointerCapture(e.pointerId);
         pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
         lastInteract = performance.now() / 1000;
+        lastMoveTime = lastInteract;
+        // grabbing the view again cancels any fling still playing out
+        velAzimuth = 0;
+        velElevation = 0;
         if (pointers.size === 2) {
           pinchStartDist = pointerDist();
           pinchStartZoom = zoomTarget;
@@ -393,10 +437,22 @@ void main() {
         if (!pt) return;
         const dx = e.clientX - pt.x;
         const dy = e.clientY - pt.y;
-        lastInteract = performance.now() / 1000;
+        const now = performance.now() / 1000;
+        lastInteract = now;
         if (pointers.size === 1) {
-          azimuth -= dx * 0.0055;
-          elevation = Math.max(-1.3, Math.min(1.3, elevation - dy * 0.0055));
+          const dAz = -dx * 0.0055;
+          const dEl = -dy * 0.0055;
+          azimuth += dAz;
+          elevation = Math.max(-1.3, Math.min(1.3, elevation + dEl));
+          // instantaneous drag speed, smoothed a little, becomes the fling
+          // velocity carried into the release-inertia phase below. Clamped
+          // so a very short dtMove (e.g. two synthetic events fired back
+          // to back) can't produce an absurd speed that takes far longer
+          // than intended to decay away.
+          const dtMove = Math.max(1 / 240, now - lastMoveTime);
+          velAzimuth = clamp(velAzimuth + (dAz / dtMove - velAzimuth) * 0.6, -9, 9);
+          velElevation = clamp(velElevation + (dEl / dtMove - velElevation) * 0.6, -9, 9);
+          lastMoveTime = now;
           pt.x = e.clientX;
           pt.y = e.clientY;
         } else if (pointers.size === 2) {
@@ -497,6 +553,17 @@ void main() {
           power += (8.0 - power) * Math.min(1, dt * 1.5);
         }
 
+        // release inertia: while no finger is on the canvas, spend down the
+        // velocity left over from the last drag - an exponential decay
+        // with a ~0.2s time constant, i.e. essentially stopped by ~0.6s.
+        if (pointers.size === 0 && !paused && (Math.abs(velAzimuth) > 1e-4 || Math.abs(velElevation) > 1e-4)) {
+          azimuth += velAzimuth * dt;
+          elevation = Math.max(-1.3, Math.min(1.3, elevation + velElevation * dt));
+          const decay = Math.exp(-dt * 5.0);
+          velAzimuth *= decay;
+          velElevation *= decay;
+        }
+
         const motionScale = reduceMotion && reduceMotion.matches ? 0.35 : 1.0;
         const idle = nowS - lastInteract > 4.0;
         if (idle && !paused) {
@@ -508,10 +575,13 @@ void main() {
         // in rather than snapping the camera distance in one frame.
         zoom += (zoomTarget - zoom) * Math.min(1, dt * 8);
 
-        // orbit distance breathes slowly between a full-specimen view and a
-        // closer pass that reveals fine surface detail; zoom scales on top.
-        const distBreathe = 3.6 + 2.2 * (0.5 + 0.5 * Math.sin(simTime * 0.05 * motionScale + 1.3));
-        const distance = clamp(distBreathe * zoom, 1.3, 9.0);
+        // orbit distance breathes slowly between a full-specimen view (bulb
+        // filling ~60% of the shorter side) and a close pass where the
+        // surface fills most of the frame and fine detail shows; zoom
+        // scales on top. The lower safety clamp keeps the camera from ever
+        // punching through the bounding sphere even at maximum pinch-in.
+        const distBreathe = 2.6 + 1.6 * (0.5 + 0.5 * Math.sin(simTime * 0.05 * motionScale + 1.3));
+        const distance = clamp(distBreathe * zoom, 1.7, 9.0);
 
         const camTarget = [0, 0, 0];
         const camPos = [

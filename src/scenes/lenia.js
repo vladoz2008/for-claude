@@ -500,7 +500,13 @@ void main() {
         const short = Math.min(gridW, gridH);
         const nOrbium = 8 + Math.floor(Math.random() * 7); // 8..14
         const placed = [];
-        const minDist = patternHalf * 2.3;
+        // Keep freshly-seeded creatures outside each other's kernel reach (radius R) at spawn
+        // time, so the dish opens with everyone swimming independently rather than already
+        // merging. Two Orbium bodies (radius ~patternHalf) only start influencing each other's
+        // growth once their centres are closer than roughly R + patternHalf; this gives a
+        // comfortable margin beyond that so early collisions are a matter of them swimming
+        // into each other, not bad luck at spawn.
+        const minDist = 2 * R + patternHalf;
         for (let i = 0; i < nOrbium; i++) {
           let cx = 0, cy = 0, ok = false;
           for (let attempt = 0; attempt < 30 && !ok; attempt++) {
@@ -553,6 +559,7 @@ void main() {
 
       // ---- one Euler step of the whole grid ---------------------------------------------------
       function simStep() {
+        window.__leniaSteps = (window.__leniaSteps || 0) + 1;
         const dst = 1 - stateIdx;
         gl.viewport(0, 0, gridW, gridH);
         gl.bindFramebuffer(gl.FRAMEBUFFER, simFbo[dst]);
@@ -602,9 +609,14 @@ void main() {
       }
 
       // ---- interaction: tap = new creature, drag = soft feeding brush -----------------------
+      // The brush is re-applied every single automaton sub-step (not once per rendered frame):
+      // scratchpad/tune-stir.cjs showed that with 2-3 sim steps per frame (the adaptive default),
+      // a "paint once per frame" brush gets fully erased by that frame's own decay before it is
+      // ever seen, because 2-3 consecutive Euler steps can subtract more than a modest brush
+      // adds. Painting at the *same* cadence as decay keeps a steady, controllable glow instead.
       let paused = false;
       const pointers = new Map();
-      let stirQueue = [];
+      const activeStir = new Map(); // pointerId -> [cx, cy], live position while held & moved
       const CLICK_SLOP = 6; // px
 
       function eventToCell(e) {
@@ -617,7 +629,7 @@ void main() {
       function onPointerDown(e) {
         canvas.setPointerCapture(e.pointerId);
         const [cx, cy] = eventToCell(e);
-        pointers.set(e.pointerId, { sx: e.clientX, sy: e.clientY, cx, cy, moved: false });
+        pointers.set(e.pointerId, { sx: e.clientX, sy: e.clientY, moved: false });
       }
       function onPointerMove(e) {
         const p = pointers.get(e.pointerId);
@@ -626,15 +638,12 @@ void main() {
         if (!p.moved && Math.hypot(dx, dy) < CLICK_SLOP) return;
         p.moved = true;
         const [cx, cy] = eventToCell(e);
-        const moved2 = Math.hypot(cx - p.cx, cy - p.cy);
-        if (moved2 > 1.5 && stirQueue.length < MAX_STIR_POINTS) {
-          stirQueue.push(cx, cy);
-          p.cx = cx; p.cy = cy;
-        }
+        activeStir.set(e.pointerId, [cx, cy]);
       }
       function onPointerUp(e) {
         const p = pointers.get(e.pointerId);
         pointers.delete(e.pointerId);
+        activeStir.delete(e.pointerId);
         try { canvas.releasePointerCapture(e.pointerId); } catch (err) { /* already released */ }
         if (p && !p.moved) {
           const [cx, cy] = eventToCell(e);
@@ -646,11 +655,16 @@ void main() {
       canvas.addEventListener('pointerup', onPointerUp);
       canvas.addEventListener('pointercancel', onPointerUp);
 
-      function flushStir(seed) {
-        if (stirQueue.length === 0) return;
-        const count = Math.min(MAX_STIR_POINTS, stirQueue.length / 2);
+      // Applies the feeding brush at every currently-held pointer's live position. Called once
+      // per automaton sub-step so painting and decay stay in lockstep regardless of stepsPerFrame.
+      function applyActiveStir(seed) {
+        if (activeStir.size === 0) return;
         const pts = new Float32Array(MAX_STIR_POINTS * 2);
-        pts.set(stirQueue.slice(0, MAX_STIR_POINTS * 2));
+        let count = 0;
+        for (const [cx, cy] of activeStir.values()) {
+          if (count >= MAX_STIR_POINTS) break;
+          pts[count * 2] = cx; pts[count * 2 + 1] = cy; count++;
+        }
         const dst = 1 - stateIdx;
         gl.viewport(0, 0, gridW, gridH);
         gl.bindFramebuffer(gl.FRAMEBUFFER, simFbo[dst]);
@@ -661,17 +675,16 @@ void main() {
         gl.uniform2f(uStir.uGridSize, gridW, gridH);
         gl.uniform2fv(uStir.uPoints, pts);
         gl.uniform1i(uStir.uPointCount, count);
-        // Tuned in scratchpad/tune-stir.cjs against the real growth/kernel constants: below
-        // ~0.28 an isolated brush stroke always dissolves within ~1s of releasing (no runaway
-        // "spontaneous life"); 0.22 is comfortably under that critical mass while still building
-        // a clearly visible glow within a few frames of continuous dragging.
+        // Tuned in scratchpad/tune-stir.cjs against the real growth/kernel constants, assuming
+        // one brush application per automaton step: below ~0.28 an isolated stroke always
+        // dissolves within roughly a second of release (no runaway "spontaneous life"); 0.22
+        // sits comfortably under that critical mass while building a clearly visible glow
+        // within a few steps of continuous dragging.
         gl.uniform1f(uStir.uRadius, Math.min(gridW, gridH) * 0.04);
         gl.uniform1f(uStir.uAmp, 0.22);
         gl.uniform1f(uStir.uSeed, seed);
         gl.drawArrays(gl.TRIANGLES, 0, 3);
-        window.__leniaLastFlush = { t: performance.now(), count, pts: Array.from(pts.slice(0, 6)) };
         stateIdx = dst;
-        stirQueue = [];
       }
 
       // ---- ui buttons -------------------------------------------------------------------------
@@ -742,13 +755,14 @@ void main() {
 
         if (!paused) {
           simTime += dt * 0.001;
-          for (let i = 0; i < stepsPerFrame; i++) simStep();
+          // Paint immediately before each decay step, at the same cadence, so a held/dragged
+          // brush reaches a stable visible glow instead of being outrun by multi-step decay.
+          for (let i = 0; i < stepsPerFrame; i++) {
+            applyActiveStir(now * 0.001 + i * 0.017);
+            simStep();
+          }
           trailStep();
         }
-        // Stirring is applied AFTER this frame's automaton step and BEFORE display, so a
-        // fresh brushstroke is always visible the instant it's drawn — it only starts decaying
-        // on the *next* frame's step, instead of being erased before it's ever shown.
-        if (stirQueue.length) flushStir(now * 0.001);
 
         renderDisplay(reducedMotion ? 0 : simTime);
       }
