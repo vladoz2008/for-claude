@@ -18,13 +18,17 @@ uniform float uTime;
 uniform vec3 uAccent;
 uniform vec2 uPhase;
 uniform float uZoom;
+uniform float uPower;
 out vec4 outColor;
 void main() {
   vec2 uv = (gl_FragCoord.xy - 0.5 * uResolution) / uResolution.y;
   uv = uv * uZoom + uPhase;
   float r = length(uv);
   float a = atan(uv.y, uv.x);
-  float petals = sin(a * 8.0 + uTime * 0.6) * 0.5 + 0.5;
+  // "Степень" toggle: raises the petal count, echoing a higher Mandelbulb
+  // power n in z -> z^n + c.
+  float lobes = 8.0 + uPower * 5.0;
+  float petals = sin(a * lobes + uTime * 0.6) * 0.5 + 0.5;
   float rings = sin(r * 14.0 - uTime * 1.4) * 0.5 + 0.5;
   float field = smoothstep(0.15, 0.9, petals * rings + 0.15);
   vec3 col = mix(vec3(0.02, 0.02, 0.035), uAccent, field);
@@ -112,10 +116,12 @@ void main() {
     const uAccent = gl.getUniformLocation(prog, 'uAccent');
     const uPhase = gl.getUniformLocation(prog, 'uPhase');
     const uZoom = gl.getUniformLocation(prog, 'uZoom');
+    const uPower = gl.getUniformLocation(prog, 'uPower');
 
     const fixedQuality = !!host.dataset.fixedQuality;
     let quality = fixedQuality ? parseFloat(host.dataset.fixedQuality) : 0.6;
     let paused = false;
+    let highPower = false;
     let phase = [0, 0];
     let zoom = 1;
     let last = performance.now();
@@ -205,14 +211,24 @@ void main() {
     const btnReset = document.createElement('button');
     btnReset.type = 'button';
     btnReset.className = 'ctl';
-    btnReset.textContent = 'Сброс';
+    btnReset.textContent = 'Сброс вида';
     btnReset.addEventListener('click', () => {
       phase = [0, 0];
       zoom = 1;
       elapsed = 0;
     });
+    const btnPower = document.createElement('button');
+    btnPower.type = 'button';
+    btnPower.className = 'ctl';
+    btnPower.textContent = 'Степень';
+    btnPower.setAttribute('aria-pressed', 'false');
+    btnPower.addEventListener('click', () => {
+      highPower = !highPower;
+      btnPower.setAttribute('aria-pressed', String(highPower));
+    });
     ui.appendChild(btnPause);
     ui.appendChild(btnReset);
+    ui.appendChild(btnPower);
 
     let raf = 0;
     function frame(now) {
@@ -238,6 +254,7 @@ void main() {
       gl.uniform3f(uAccent, accentRgb[0], accentRgb[1], accentRgb[2]);
       gl.uniform2f(uPhase, phase[0], phase[1]);
       gl.uniform1f(uZoom, zoom);
+      gl.uniform1f(uPower, highPower ? 1 : 0);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
     }
     raf = requestAnimationFrame(frame);

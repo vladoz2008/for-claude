@@ -18,6 +18,7 @@ uniform float uTime;
 uniform vec3 uAccent;
 uniform vec2 uPhase;
 uniform float uZoom;
+uniform float uDoppler;
 out vec4 outColor;
 void main() {
   vec2 uv = (gl_FragCoord.xy - 0.5 * uResolution) / uResolution.y;
@@ -26,7 +27,10 @@ void main() {
   float a = atan(uv.y, uv.x);
   float swirl = sin(a * 6.0 - uTime * 0.8 + 4.0 / (r + 0.15)) * 0.5 + 0.5;
   float glow = smoothstep(0.9, 0.0, r) * (0.35 + 0.65 * swirl);
-  vec3 col = mix(vec3(0.02, 0.02, 0.03), uAccent, glow);
+  // "Доплер" toggle: brightens the approaching (upper) half of the disc and
+  // dims the receding half, echoing relativistic Doppler beaming.
+  float beam = 1.0 + uDoppler * 0.5 * sin(a);
+  vec3 col = mix(vec3(0.02, 0.02, 0.03), uAccent, glow * beam);
   col += pow(max(0.0, 1.0 - r * 1.6), 8.0);
   outColor = vec4(col, 1.0);
 }`;
@@ -112,10 +116,12 @@ void main() {
     const uAccent = gl.getUniformLocation(prog, 'uAccent');
     const uPhase = gl.getUniformLocation(prog, 'uPhase');
     const uZoom = gl.getUniformLocation(prog, 'uZoom');
+    const uDoppler = gl.getUniformLocation(prog, 'uDoppler');
 
     const fixedQuality = !!host.dataset.fixedQuality;
     let quality = fixedQuality ? parseFloat(host.dataset.fixedQuality) : 0.6;
     let paused = false;
+    let doppler = false;
     let phase = [0, 0];
     let zoom = 1;
     let last = performance.now();
@@ -205,14 +211,24 @@ void main() {
     const btnReset = document.createElement('button');
     btnReset.type = 'button';
     btnReset.className = 'ctl';
-    btnReset.textContent = 'Сброс';
+    btnReset.textContent = 'Сброс вида';
     btnReset.addEventListener('click', () => {
       phase = [0, 0];
       zoom = 1;
       elapsed = 0;
     });
+    const btnDoppler = document.createElement('button');
+    btnDoppler.type = 'button';
+    btnDoppler.className = 'ctl';
+    btnDoppler.textContent = 'Доплер';
+    btnDoppler.setAttribute('aria-pressed', 'false');
+    btnDoppler.addEventListener('click', () => {
+      doppler = !doppler;
+      btnDoppler.setAttribute('aria-pressed', String(doppler));
+    });
     ui.appendChild(btnPause);
     ui.appendChild(btnReset);
+    ui.appendChild(btnDoppler);
 
     let raf = 0;
     function frame(now) {
@@ -238,6 +254,7 @@ void main() {
       gl.uniform3f(uAccent, accentRgb[0], accentRgb[1], accentRgb[2]);
       gl.uniform2f(uPhase, phase[0], phase[1]);
       gl.uniform1f(uZoom, zoom);
+      gl.uniform1f(uDoppler, doppler ? 1 : 0);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
     }
     raf = requestAnimationFrame(frame);

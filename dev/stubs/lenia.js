@@ -18,6 +18,7 @@ uniform float uTime;
 uniform vec3 uAccent;
 uniform vec2 uPhase;
 uniform float uZoom;
+uniform float uKernel;
 out vec4 outColor;
 void main() {
   vec2 uv = (gl_FragCoord.xy - 0.5 * uResolution) / uResolution.y;
@@ -26,6 +27,9 @@ void main() {
           + sin((uv.x + uv.y) * 5.0 + uTime * 1.3) * 0.6;
   float field = smoothstep(-0.2, 1.1, n);
   vec3 col = mix(vec3(0.02, 0.03, 0.035), uAccent, field);
+  // "Ядро" toggle: overlays a faint ring at the convolution kernel's radius.
+  float ring = 1.0 - smoothstep(0.0, 0.02, abs(length(uv) - 0.5));
+  col += uKernel * ring * uAccent * 0.6;
   outColor = vec4(col, 1.0);
 }`;
 
@@ -110,10 +114,12 @@ void main() {
     const uAccent = gl.getUniformLocation(prog, 'uAccent');
     const uPhase = gl.getUniformLocation(prog, 'uPhase');
     const uZoom = gl.getUniformLocation(prog, 'uZoom');
+    const uKernel = gl.getUniformLocation(prog, 'uKernel');
 
     const fixedQuality = !!host.dataset.fixedQuality;
     let quality = fixedQuality ? parseFloat(host.dataset.fixedQuality) : 0.6;
     let paused = false;
+    let kernelView = false;
     let phase = [0, 0];
     let zoom = 1;
     let last = performance.now();
@@ -203,14 +209,24 @@ void main() {
     const btnReset = document.createElement('button');
     btnReset.type = 'button';
     btnReset.className = 'ctl';
-    btnReset.textContent = 'Сброс';
+    btnReset.textContent = 'Сброс вида';
     btnReset.addEventListener('click', () => {
       phase = [0, 0];
       zoom = 1;
       elapsed = 0;
     });
+    const btnKernel = document.createElement('button');
+    btnKernel.type = 'button';
+    btnKernel.className = 'ctl';
+    btnKernel.textContent = 'Ядро';
+    btnKernel.setAttribute('aria-pressed', 'false');
+    btnKernel.addEventListener('click', () => {
+      kernelView = !kernelView;
+      btnKernel.setAttribute('aria-pressed', String(kernelView));
+    });
     ui.appendChild(btnPause);
     ui.appendChild(btnReset);
+    ui.appendChild(btnKernel);
 
     let raf = 0;
     function frame(now) {
@@ -236,6 +252,7 @@ void main() {
       gl.uniform3f(uAccent, accentRgb[0], accentRgb[1], accentRgb[2]);
       gl.uniform2f(uPhase, phase[0], phase[1]);
       gl.uniform1f(uZoom, zoom);
+      gl.uniform1f(uKernel, kernelView ? 1 : 0);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
     }
     raf = requestAnimationFrame(frame);
