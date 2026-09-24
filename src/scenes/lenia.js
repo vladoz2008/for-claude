@@ -186,40 +186,29 @@ float texelAt(sampler2D tex, ivec2 c, ivec2 size) {
   return texelFetch(tex, ivec2(wrapi(c.x, size.x), wrapi(c.y, size.y)), 0).r;
 }
 
-// Bilinear (+smootherstep) upsampling — used for the trail and growth fields, which are
-// already diffuse/soft, so a cheaper 4-tap filter is indistinguishable from bicubic there.
-float sampleBilinear(sampler2D tex, vec2 uv, ivec2 size) {
-  vec2 texel = uv * vec2(size) - 0.5;
-  vec2 i0f = floor(texel);
-  vec2 f = smoothstep(0.0, 1.0, texel - i0f);
-  ivec2 i0 = ivec2(i0f);
-  float v00 = texelAt(tex, i0, size);
-  float v10 = texelAt(tex, i0 + ivec2(1, 0), size);
-  float v01 = texelAt(tex, i0 + ivec2(0, 1), size);
-  float v11 = texelAt(tex, i0 + ivec2(1, 1), size);
-  return mix(mix(v00, v10, f.x), mix(v01, v11, f.x), f.y);
-}
-
-// Catmull-Rom cubic weights for a fractional offset t, for the 4 taps at relative x = -1,0,1,2.
-vec4 cubicWeights(float t) {
+// Uniform cubic B-spline weights for a fractional offset t, for the 4 taps at relative
+// x = -1,0,1,2. Unlike Catmull-Rom (which interpolates through the samples and therefore
+// overshoots/rings near sharp transitions), every B-spline weight is non-negative and they
+// always sum to 1 — a pure, ring-free blur. That trades a little sharpness for outlines that
+// are genuinely smooth curves instead of stepped or haloed ones.
+vec4 bsplineWeights(float t) {
   float t2 = t * t, t3 = t2 * t;
-  return vec4(
-    -0.5 * t3 +       t2 - 0.5 * t,
-     1.5 * t3 - 2.5 * t2 + 1.0,
-    -1.5 * t3 + 2.0 * t2 + 0.5 * t,
-     0.5 * t3 - 0.5 * t2
-  );
+  float w0 = (1.0 - t) * (1.0 - t) * (1.0 - t) / 6.0;
+  float w1 = (3.0 * t3 - 6.0 * t2 + 4.0) / 6.0;
+  float w2 = (-3.0 * t3 + 3.0 * t2 + 3.0 * t + 1.0) / 6.0;
+  float w3 = t3 / 6.0;
+  return vec4(w0, w1, w2, w3);
 }
-// 4x4-tap Catmull-Rom bicubic, done with texelFetch (no linear-filterable-float dependency).
-// This is what turns the low-res simulation grid into a continuous, softly-curved membrane
-// instead of a stepped/blocky upscale — used for the body, since that's what the eye reads
-// edges from.
-float sampleBicubic(sampler2D tex, vec2 uv, ivec2 size) {
+// 4x4-tap bicubic B-spline, done with texelFetch (no linear-filterable-float dependency).
+// This is the ONE smoothing filter used everywhere in this pass — state, trail, growth, and
+// every halo tap all go through it, so no field is left at nearest/blocky while another is
+// smooth (that mismatch is what produced staircase edges before).
+float sampleSmooth(sampler2D tex, vec2 uv, ivec2 size) {
   vec2 texel = uv * vec2(size) - 0.5;
   vec2 i0f = floor(texel);
   vec2 f = texel - i0f;
-  vec4 wx = cubicWeights(f.x);
-  vec4 wy = cubicWeights(f.y);
+  vec4 wx = bsplineWeights(f.x);
+  vec4 wy = bsplineWeights(f.y);
   ivec2 i0 = ivec2(i0f);
   float result = 0.0;
   for (int j = 0; j < 4; j++) {
@@ -230,17 +219,15 @@ float sampleBicubic(sampler2D tex, vec2 uv, ivec2 size) {
   return result;
 }
 
-// Cheap ring-sampled halo standing in for a separable blur: a handful of wide taps around the
-// point, averaged, so bright tissue gets a soft bloom without an extra render pass.
+// Soft halo standing in for a separable blur: a handful of wide taps around the point,
+// averaged — each tap itself smooth (sampleSmooth), so the halo has no blocky stepping either.
 float sampleBloom(sampler2D tex, vec2 uv, ivec2 size) {
-  vec2 center = uv * vec2(size);
-  ivec2 ic = ivec2(floor(center));
-  float sum = texelAt(tex, ic, size) * 0.3;
-  const int N = 8;
+  float sum = sampleSmooth(tex, uv, size) * 0.34;
+  const int N = 6;
   for (int k = 0; k < N; k++) {
     float ang = 6.28318530718 * float(k) / float(N);
-    vec2 off = vec2(cos(ang), sin(ang)) * 4.0;
-    sum += texelAt(tex, ic + ivec2(floor(off + 0.5)), size) * (0.7 / float(N));
+    vec2 offUv = vec2(cos(ang), sin(ang)) * 4.0 / vec2(size);
+    sum += sampleSmooth(tex, uv + offUv, size) * (0.66 / float(N));
   }
   return sum;
 }
@@ -249,38 +236,40 @@ float hash(vec2 p) { p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32)
 
 void main() {
   ivec2 size = ivec2(uGridSize);
-  float a = clamp(sampleBicubic(uState, vUv, size), 0.0, 1.0);
-  float t = clamp(sampleBilinear(uTrail, vUv, size), 0.0, 1.0);
-  float g = sampleBilinear(uGrowth, vUv, size);
+  float a = clamp(sampleSmooth(uState, vUv, size), 0.0, 1.0);
+  float t = clamp(sampleSmooth(uTrail, vUv, size), 0.0, 1.0);
+  float g = sampleSmooth(uGrowth, vUv, size);
   float bloom = sampleBloom(uState, vUv, size);
 
-  // Bioluminescent microscopy palette: dark ground -> dim tissue trail -> living body ->
-  // bright tissue -> near-white cores, layered by increasing state intensity.
+  // Bioluminescent, translucent palette: dark ground -> dim tissue trail -> a wide band of
+  // glowing mid teal for most of the body -> pale/near-white only in the small, densest core.
   vec3 ground  = vec3(0.0118, 0.0314, 0.0392);
   vec3 trailC  = vec3(0.0706, 0.2980, 0.3220); // brightened dim-teal, so wakes read clearly
-  vec3 bodyC   = vec3(0.1843, 0.7255, 0.6471);
-  vec3 brightC = vec3(0.8471, 0.9490, 0.7686);
-  vec3 coreC   = vec3(0.9647, 1.0, 0.9412);
+  vec3 bodyC   = vec3(0.1843, 0.7255, 0.6471); // #2FB9A5 — most of a creature reads as this
+  vec3 brightC = vec3(0.8471, 0.9490, 0.7686); // #D8F2C4
+  vec3 coreC   = vec3(0.9647, 1.0, 0.9412);    // #F6FFF0 — only the densest core
   vec3 warmC   = vec3(0.9490, 0.7608, 0.4824); // #F2C27B — the leading, growing edge
 
-  vec3 col = mix(ground, trailC, smoothstep(0.015, 0.35, t));
-  col = mix(col, bodyC, smoothstep(0.06, 0.32, a));
-  col = mix(col, brightC, smoothstep(0.34, 0.66, a));
-  col = mix(col, coreC, smoothstep(0.68, 0.97, a));
+  // Wide, gentle onsets throughout so contours are soft curves rather than hard rings; bright
+  // and core are pushed to the high end and kept narrow, so only the densest tissue turns pale
+  // — the bulk of a creature stays a glowing, translucent mid teal.
+  vec3 col = mix(ground, trailC, smoothstep(0.02, 0.5, t));
+  col = mix(col, bodyC, smoothstep(0.05, 0.55, a));
+  col = mix(col, brightC, smoothstep(0.62, 0.88, a));
+  col = mix(col, coreC, smoothstep(0.90, 0.99, a));
 
   // Metabolism colour: G > 0 is tissue being built (the leading edge a creature swims into) —
-  // tint it warm. G < 0 is tissue decaying back down (the trailing edge) — left as the cool
-  // teal/white body colours above, untouched. A true, if subtle, readout of the growth field
-  // itself: each creature ends up with a warm "front" and a cool "tail". The growing band sits
-  // mostly where tissue is still thin (low a, not yet full body), so gate presence with a low
-  // threshold rather than raw a — multiplying by a directly would suppress the tint exactly
-  // where growth is strongest.
+  // add a faint warm GLOW there (additive, not a fill, so it never replaces the translucent
+  // teal body). G < 0 is tissue decaying back down (the trailing edge) — left untouched, cool.
+  // The growing band sits mostly where tissue is still thin (low a, not yet full body), so gate
+  // presence with a low threshold rather than raw a — multiplying by a directly would suppress
+  // the tint exactly where growth is strongest.
   float gPos = clamp(g, 0.0, 1.0);
-  float presence = smoothstep(0.02, 0.2, a);
-  col = mix(col, warmC, gPos * presence * 0.55);
+  float presence = smoothstep(0.03, 0.3, a);
+  col += warmC * gPos * presence * 0.22;
 
   // Soft bloom under bright tissue, like light scattering through tissue and water.
-  col += brightC * bloom * bloom * 0.5;
+  col += brightC * bloom * bloom * 0.4;
 
   // Dark-field microscope vignette: a soft, wide falloff (never a hard mask) plus a faint cool
   // darkening further out, for the sense of a lit field even against a near-black background.
