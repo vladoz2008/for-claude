@@ -57,7 +57,7 @@
                                       // tuned so the disk spans white-hot / pale-yellow inner gas
                                       // to deep orange/amber at the outer edge, like the real
                                       // T(r) profile (peak near the inner edge, r^-0.75 falloff).
-    const float BASE_BRIGHT = 1.75;
+    const float BASE_BRIGHT = 1.5;
     const float OMEGA0 = 1.15;       // Keplerian angular-speed constant: omega(r) = OMEGA0 * r^-1.5
     const int MAX_STEPS_CONST = 225; // hard cap the compiler can prove termination on
 
@@ -149,23 +149,25 @@
                       * smoothstep(DISK_OUTER, DISK_OUTER - 2.2, rDisk);
       if (edgeFade <= 0.002) return vec4(0.0);
 
-      // Procedural turbulence: rotate the hit point BACKWARDS by omega(r)*t around the y axis
-      // (a co-rotating frame) and sample noise directly in that Cartesian (x, z, log r) space,
-      // instead of in raw (log r, phi). Differential Keplerian shear - inner radii rotate faster
-      // - then makes the static noise field appear to spiral as u_diskTime advances. Sampling
-      // Cartesian coordinates (rather than the angle phi itself) means there is no branch-cut
-      // seam at phi = +-pi: a raw-phi noise coordinate jumps discontinuously there, which shows
-      // up as a hard line through the disk; cos/sin-free Cartesian coordinates never jump.
+      // Procedural turbulence, sampled anisotropically so it reads as sheared gas filaments
+      // rather than an isotropic cellular/caustic net. phi' = phi - omega(r)*t is the azimuth in
+      // a co-rotating frame (differential Keplerian shear - inner radii rotate faster - makes the
+      // static noise field appear to spiral as u_diskTime advances). Embedding phi' as
+      // (cos phi', sin phi') keeps the circle seamless (no branch-cut jump at phi = +-pi, unlike
+      // sampling the raw angle), while a HIGH frequency along log(r) and a LOW frequency around
+      // the circle stretches every noise feature into a long, thin azimuthal arc.
+      float phi = atan(p.z, p.x);
       float omega = OMEGA0 * pow(rDisk, -1.5);
-      float ang = -omega * u_diskTime;
-      float ca = cos(ang), sa = sin(ang);
-      vec2 rot = vec2(ca * p.x - sa * p.z, sa * p.x + ca * p.z);
-      vec3 sp = vec3(rot.x, rot.y, log(rDisk) * 4.5);
-      // Broad low-frequency layer gives overall coverage/shape; a ridged (folded) detail layer
-      // turns the high-frequency component into thin bright filaments instead of soft blotches,
-      // matching sheared turbulent gas rather than clouds.
-      float base = fbm3(sp * 0.55, 3);
-      float detail = fbm3(sp * 1.7 + 23.0, 3);
+      float phiPrime = phi - omega * u_diskTime;
+      float lr = log(rDisk);
+      const float RADIAL_FREQ = 13.0;  // cells per unit log(r) - fine radial detail
+      const float ANGULAR_FREQ = 3.0;  // cells around the full circle - long azimuthal streaks
+      vec3 sp = vec3(lr * RADIAL_FREQ, cos(phiPrime) * ANGULAR_FREQ, sin(phiPrime) * ANGULAR_FREQ);
+      // Broad layer gives overall coverage/shape; a ridged (folded) detail layer - same
+      // anisotropic streak shape, finer scale - turns it into thin bright filaments rather than
+      // soft blotches, matching sheared turbulent gas rather than clouds or cellular foam.
+      float base = fbm3(sp * 0.4, 3);
+      float detail = fbm3(sp * 0.9 + 23.0, 3);
       float ridged = pow(1.0 - abs(detail * 2.0 - 1.0), 2.0);
       float density = clamp(0.18 + 0.42 * base + 0.55 * ridged, 0.0, 1.0) * edgeFade;
 
@@ -176,7 +178,7 @@
       // orange/amber outer disk, and make the inner edge noticeably more opaque/bright so the
       // near limb reads as a solid bright band rather than a thin translucent haze.
       float innerT = smoothstep(DISK_OUTER * 0.55, DISK_INNER, rDisk);
-      float radialBoost = mix(0.55, 2.3, innerT);
+      float radialBoost = mix(0.55, 2.0, innerT);
       float opacityBoost = mix(0.5, 1.0, innerT);
 
       float g = 1.0;
@@ -197,68 +199,63 @@
       // grey so the hot-white / cool-orange contrast across the disk actually reads on screen.
       float lum = dot(col, vec3(0.299, 0.587, 0.114));
       col = clamp(lum + (col - lum) * 1.5, 0.0, 4.0);
-      float intensity = pow(max(g, 0.0001), 4.0);   // relativistic beaming, I_obs ~ g^4 I_emit
+      // Relativistic beaming: I_obs ~ g^3 I_emit (the monochromatic-intensity exponent rather
+      // than g^4) - g^4 pushed the approaching side into a flat blown-out white blob with no
+      // visible streak texture; g^3 keeps it clearly the brightest/bluest side while the
+      // turbulence detail still reads through it.
+      float intensity = pow(max(g, 0.0001), 3.0);
       vec3 emit = col * intensity * BASE_BRIGHT * radialBoost * density;
       float alpha = clamp(density * 0.72 * opacityBoost, 0.0, 1.0);
       return vec4(emit, alpha);
     }
 
-    // ---- procedural sky: stars (direction-hashed, smooth discs) + a faint galactic band -------
-    // Stars are placed by hashing a cube-face grid (so the hashing itself is O(1) and seam-free
-    // in practice), but their SHAPE is measured as a true angular distance on the sphere (dot
-    // product), not as Euclidean distance in the gnomonic-projected uv plane - that plane badly
-    // stretches shapes away from each face's centre, which is the "distortion" the contract
-    // warns about. The only place stars should visibly stretch is near the shadow, where that
-    // is real gravitational lensing, not a projection artifact.
+    // ---- procedural sky: stars (true 3D cell hash, smooth Gaussian discs) + a faint band -------
+    // A single cube face's grid is a GNOMONIC projection: cells stay roughly square only near
+    // each face's centre and stretch severely near its edges/corners. Searching that grid's 3x3
+    // neighbourhood in uv-space does not correspond to a uniform angular search everywhere - near
+    // a face edge a star whose true position is angularly close to a pixel can sit in a uv-cell
+    // outside that pixel's 3x3 window (or vice-versa), so only PART of the star's footprint gets
+    // evaluated by neighbouring pixels: a clipped sliver/dash instead of a full round point. Using
+    // a genuine 3D lattice directly on the direction vector (floor(dir * density)) has no such
+    // single-axis blow-up, and a full 3x3x3 = 27-cell search (cheap - this runs once per escaped
+    // ray, not per step) comfortably covers every star whose footprint could reach this pixel.
     vec3 starLayer(vec3 dir, float density, float thresh) {
-      vec3 ad = abs(dir);
-      vec2 uv; float faceId; float axisSign;
-      if (ad.x >= ad.y && ad.x >= ad.z) {
-        uv = dir.yz / ad.x; axisSign = sign(dir.x); faceId = axisSign > 0.0 ? 0.0 : 1.0;
-      } else if (ad.y >= ad.x && ad.y >= ad.z) {
-        uv = dir.xz / ad.y; axisSign = sign(dir.y); faceId = axisSign > 0.0 ? 2.0 : 3.0;
-      } else {
-        uv = dir.xy / ad.z; axisSign = sign(dir.z); faceId = axisSign > 0.0 ? 4.0 : 5.0;
-      }
-      vec2 guv = (uv * 0.5 + 0.5) * density;
-      vec2 cellF = floor(guv);
+      vec3 p = dir * density;
+      vec3 cellF = floor(p);
       vec3 acc = vec3(0.0);
-      for (int oy = -1; oy <= 1; oy++) {
-        for (int ox = -1; ox <= 1; ox++) {
-          vec2 c = cellF + vec2(float(ox), float(oy));
-          float h = hash31(vec3(c, faceId));
-          if (h > thresh) {
-            float hBright = hash31(vec3(c + 7.0, faceId + 3.0));   // brightness seed
-            float hTemp = hash31(vec3(c + 13.0, faceId + 29.0));   // colour-temperature seed
-            vec2 starGrid = c + vec2(hash31(vec3(c, faceId + 11.0)), hash31(vec3(c, faceId + 19.0)));
-            vec2 starFaceUv = (starGrid / density) * 2.0 - 1.0; // back to this face's [-1,1] plane
-            // Reconstruct the star's true 3D direction from its face coordinate, matching how
-            // uv was built above for each axis, then compare with a dot product (angle), not
-            // a planar distance - this keeps every star perfectly round anywhere on the sky.
-            vec3 starDir = faceId < 1.5 ? vec3(axisSign, starFaceUv.x, starFaceUv.y)
-                         : faceId < 3.5 ? vec3(starFaceUv.x, axisSign, starFaceUv.y)
-                         : vec3(starFaceUv.x, starFaceUv.y, axisSign);
-            starDir = normalize(starDir);
-            // Chord (Euclidean) distance between the two unit vectors, not cos(angle): for the
-            // tiny sub-degree angles a pinpoint star spans, 1-cos(angle) ~= angle^2/2, which
-            // throws away almost all precision in a 32-bit float and made the falloff noisy and
-            // asymmetric per pixel (showing up as streaky, elongated "rice grain" shapes instead
-            // of round dots). Chord distance is ~= angle for small angles and stays well
-            // conditioned, giving a clean, stable, truly round falloff.
-            float d = length(dir - starDir);
-            // Size directly in units of the CURRENT pixel's angular footprint: roughly half a
-            // pixel to two pixels in radius, with about a pixel of soft falloff on top - small,
-            // reliably round pinpoints at any render resolution.
-            float radiusPx = mix(0.5, 1.5, pow(hBright, 3.0));
-            float angRad = u_pixelAngle * radiusPx;
-            float shape = 1.0 - smoothstep(angRad, angRad + u_pixelAngle * 1.4, d);
-            // Real star fields are dominated by faint stars with only a rare few standing out -
-            // a steep power keeps most pinpoints dim and only a handful bright. Kept below the
-            // bloom bright-pass threshold so stars stay crisp pinpoints instead of blooming into
-            // soft (and, at this render resolution, slightly asymmetric-looking) blobs.
-            float brightness = mix(0.05, 0.32, pow(hBright, 4.5));
-            vec3 tint = mix(vec3(0.72, 0.80, 1.0), vec3(1.0, 0.86, 0.68), hTemp);
-            acc += shape * brightness * tint;
+      for (int oz = -1; oz <= 1; oz++) {
+        for (int oy = -1; oy <= 1; oy++) {
+          for (int ox = -1; ox <= 1; ox++) {
+            vec3 c = cellF + vec3(float(ox), float(oy), float(oz));
+            float h = hash31(c);
+            if (h > thresh) {
+              float hBright = hash31(c + vec3(7.0, 3.0, 41.0));   // brightness seed
+              float hTemp = hash31(c + vec3(13.0, 29.0, 5.0));    // colour-temperature seed
+              vec3 jitter = vec3(
+                hash31(c + vec3(17.0, 2.0, 9.0)),
+                hash31(c + vec3(23.0, 4.0, 31.0)),
+                hash31(c + vec3(41.0, 6.0, 53.0))
+              );
+              vec3 starDir = normalize(c + jitter);
+              // Chord (Euclidean) distance, not cos(angle): for the tiny sub-degree angles a
+              // pinpoint star spans, 1-cos(angle) ~= angle^2/2, which throws away almost all
+              // precision in a 32-bit float. Chord distance stays ~= angle and well conditioned.
+              float d = length(dir - starDir);
+              // Never let a star shrink below ~0.7 pixels - smaller than that and single-sample
+              // (no supersampling) rendering aliases it into a jagged sliver depending on exactly
+              // where its centre falls relative to the pixel grid.
+              float desiredRad = u_pixelAngle * mix(0.55, 1.5, pow(hBright, 3.0));
+              float angRad = max(desiredRad, u_pixelAngle * 0.7);
+              // A Gaussian (rather than a hard-edged smoothstep disc) falls off gracefully at
+              // sub-pixel scale instead of aliasing into a jagged or lopsided shape.
+              float shape = exp(-(d * d) / (2.0 * angRad * angRad));
+              // Real star fields are dominated by faint stars with only a rare few standing out -
+              // a steep power keeps most pinpoints dim. Kept below the bloom threshold so stars
+              // stay crisp instead of blooming into soft blobs.
+              float brightness = mix(0.05, 0.32, pow(hBright, 4.5));
+              vec3 tint = mix(vec3(0.72, 0.80, 1.0), vec3(1.0, 0.86, 0.68), hTemp);
+              acc += shape * brightness * tint;
+            }
           }
         }
       }
@@ -277,8 +274,8 @@
       float bandNoise = fbm2(vec2(dir.x * 3.0 + dir.z * 2.0, dir.y * 5.0) * 2.2, 3) * 0.5 + 0.5;
       col += band * bandNoise * vec3(0.045, 0.04, 0.045) * 0.4;
 
-      col += starLayer(dir, 45.0, 0.90);
-      col += starLayer(dir, 105.0, 0.94);
+      col += starLayer(dir, 35.0, 0.92);
+      col += starLayer(dir, 70.0, 0.95);
       return col;
     }
 
