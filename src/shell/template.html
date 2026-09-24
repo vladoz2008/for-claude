@@ -1,0 +1,54 @@
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Oranienbaum&family=Golos+Text:wght@400;500&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>{{STYLE}}</style>
+<!--HEAD_END-->
+<div id="stage"></div>
+<div id="veil" class="veil" aria-hidden="true"></div>
+<div id="chrome" class="chrome">
+  <div class="scrim scrim-top" aria-hidden="true"></div>
+  <div class="scrim scrim-bottom" aria-hidden="true"></div>
+
+  <header class="topbar">
+    <div class="brand">
+      <h1 class="brand-title">Три невозможные вещи</h1>
+      <p class="brand-quote">«Иногда я успевала поверить в шесть невозможных вещей ещё до завтрака» — Белая Королева</p>
+    </div>
+    <div class="topbar-controls">
+      <div id="scene-ui" class="scene-ui"></div>
+      <button type="button" id="btn-hide" class="ctl" aria-pressed="false">Скрыть</button>
+      <button type="button" id="btn-fullscreen" class="ctl" aria-pressed="false">Во весь экран</button>
+    </div>
+  </header>
+
+  <div class="bottom-overlay">
+    <section class="info-panel" id="info-panel">
+      <div class="info-header">
+        <span class="info-index info-fade-target" id="scene-index">I</span>
+        <h2 class="scene-name info-fade-target" id="scene-name">Гаргантюа</h2>
+      </div>
+      <p class="scene-tagline info-fade-target" id="scene-tagline"></p>
+      <button type="button" class="info-toggle" id="info-toggle" aria-expanded="false" aria-controls="info-details">Подробнее</button>
+      <div class="info-details" id="info-details">
+        <p class="scene-about info-fade-target" id="scene-about"></p>
+        <dl class="scene-spec info-fade-target" id="scene-spec"></dl>
+        <p class="scene-hint info-fade-target" id="scene-hint"></p>
+      </div>
+    </section>
+
+    <nav class="switcher" id="switcher" aria-label="Выбор сцены">
+      <button type="button" class="switch-btn" data-scene="gargantua" aria-current="true">
+        <span class="switch-num">I</span><span class="switch-name">Гаргантюа</span>
+      </button>
+      <button type="button" class="switch-btn" data-scene="lenia" aria-current="false">
+        <span class="switch-num">II</span><span class="switch-name">Ления</span>
+      </button>
+      <button type="button" class="switch-btn" data-scene="mandelbulb" aria-current="false">
+        <span class="switch-num">III</span><span class="switch-name">Мандельбульб</span>
+      </button>
+    </nav>
+  </div>
+</div>
+
+<button type="button" id="btn-show" class="ghost-show" hidden>Показать интерфейс</button>
+{{SCRIPTS}}

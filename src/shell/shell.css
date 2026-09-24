@@ -1,0 +1,585 @@
+/*
+  «Три невозможные вещи» — shell styling.
+  One deliberate world: a night observatory. All colour comes from tokens
+  on :root; there is no light theme by design (color-scheme: dark).
+*/
+
+:root {
+  color-scheme: dark;
+
+  /* palette */
+  --void: #06070b;                    /* ground / page background */
+  --ink: #e8e4da;                     /* primary text — starlight parchment */
+  --dim: #8b90a4;                     /* secondary text — blue-biased grey */
+  --hair: rgba(232, 228, 218, 0.14);  /* hairline borders / separators */
+  --glass: rgba(8, 9, 14, 0.55);      /* panel backgrounds */
+  --accent: #f2b880;                  /* overwritten at runtime per active scene */
+
+  /* type */
+  --font-display: 'Oranienbaum', 'Didot', 'Bodoni 72', Georgia, serif;
+  --font-body: 'Golos Text', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace;
+
+  /* motion */
+  --veil-ms: 350ms;
+  --fade-ms: 200ms;
+
+  /* safe-area helpers (0 when the host doesn't provide the env) */
+  --sa-top: env(safe-area-inset-top, 0px);
+  --sa-right: env(safe-area-inset-right, 0px);
+  --sa-bottom: env(safe-area-inset-bottom, 0px);
+  --sa-left: env(safe-area-inset-left, 0px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --veil-ms: 0ms;
+    --fade-ms: 0ms;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  background: var(--void);
+}
+
+body {
+  margin: 0;
+  color: var(--ink);
+  font-family: var(--font-body);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+}
+
+/* ---------- stage & transition veil ---------- */
+
+#stage {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  background: var(--void);
+  overflow: hidden;
+}
+
+.veil {
+  position: fixed;
+  inset: 0;
+  z-index: 5;
+  background: var(--void);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--veil-ms) ease;
+}
+
+.veil.is-visible {
+  opacity: 1;
+}
+
+.scene-fallback {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10vh 8vw;
+  text-align: center;
+  font: 500 16px/1.6 var(--font-body);
+  color: var(--dim);
+  background: var(--void);
+}
+
+/* ---------- chrome (all overlay UI) ---------- */
+
+.chrome {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  pointer-events: none;
+  transition: opacity 300ms ease;
+}
+
+.chrome.is-hidden {
+  opacity: 0;
+}
+
+.chrome.is-hidden .ctl,
+.chrome.is-hidden .switch-btn,
+.chrome.is-hidden .info-toggle {
+  pointer-events: none;
+}
+
+.scrim {
+  position: fixed;
+  left: 0;
+  right: 0;
+  height: 22vh;
+  min-height: 140px;
+  pointer-events: none;
+}
+
+.scrim-top {
+  top: 0;
+  background: linear-gradient(to bottom, rgba(6, 7, 11, 0.75), rgba(6, 7, 11, 0));
+}
+
+.scrim-bottom {
+  bottom: 0;
+  background: linear-gradient(to top, rgba(6, 7, 11, 0.75), rgba(6, 7, 11, 0));
+}
+
+/* ---------- shared control style ---------- */
+
+.ctl,
+.info-toggle,
+.ghost-show {
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 16px;
+  border-radius: 999px;
+  border: 1px solid var(--hair);
+  background: var(--glass);
+  backdrop-filter: blur(10px) saturate(1.2);
+  -webkit-backdrop-filter: blur(10px) saturate(1.2);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: border-color 150ms ease, color 150ms ease, background 150ms ease;
+}
+
+@media (min-width: 480px) {
+  .ctl,
+  .info-toggle,
+  .ghost-show {
+    height: 36px;
+    font-size: 12px;
+  }
+}
+
+.ctl:hover,
+.info-toggle:hover,
+.ghost-show:hover {
+  border-color: rgba(232, 228, 218, 0.4);
+}
+
+.ctl[aria-pressed='true'] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.ctl:focus-visible,
+.info-toggle:focus-visible,
+.ghost-show:focus-visible,
+.switch-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--void), 0 0 0 4px var(--accent);
+}
+
+/* ---------- topbar ---------- */
+
+.topbar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 2;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: calc(28px + var(--sa-top)) calc(28px + var(--sa-right)) 0 calc(28px + var(--sa-left));
+  pointer-events: none;
+}
+
+.brand {
+  pointer-events: none;
+  max-width: 62vw;
+}
+
+.brand-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 400;
+  font-size: clamp(26px, 3.6vw, 42px);
+  line-height: 1.05;
+  letter-spacing: 0.01em;
+  color: var(--ink);
+}
+
+.brand-quote {
+  margin: 8px 0 0;
+  max-width: 38ch;
+  color: var(--dim);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.topbar-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.scene-ui {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.scene-ui:empty {
+  display: none;
+}
+
+/* ---------- bottom overlay: info panel + switcher ---------- */
+
+.bottom-overlay {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: row;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 0 calc(28px + var(--sa-right)) calc(24px + var(--sa-bottom)) calc(28px + var(--sa-left));
+  pointer-events: none;
+}
+
+.info-panel {
+  pointer-events: none;
+  max-width: 620px;
+}
+
+.info-header {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.info-index {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.16em;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+
+.info-index::after {
+  content: '';
+  width: 30px;
+  height: 1px;
+  background: var(--accent);
+  opacity: 0.55;
+}
+
+.scene-name {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 400;
+  font-size: clamp(40px, 7vw, 92px);
+  line-height: 0.98;
+  color: var(--ink);
+}
+
+.scene-tagline {
+  margin: 10px 0 0;
+  max-width: 52ch;
+  color: var(--dim);
+  font-size: clamp(13px, 1.3vw, 15px);
+  line-height: 1.5;
+}
+
+.info-toggle {
+  display: none;
+  margin-top: 14px;
+}
+
+.info-details {
+  margin-top: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.scene-about {
+  margin: 0;
+  max-width: 46ch;
+  color: var(--ink);
+  opacity: 0.86;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.scene-spec {
+  margin: 0;
+  display: grid;
+  grid-template-columns: max-content max-content;
+  column-gap: 18px;
+  row-gap: 6px;
+  max-width: 46ch;
+  padding-top: 12px;
+  border-top: 1px solid var(--hair);
+}
+
+.scene-spec dt {
+  grid-column: 1;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--dim);
+  white-space: nowrap;
+}
+
+.scene-spec dd {
+  grid-column: 2;
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.scene-hint {
+  margin: 4px 0 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: var(--accent);
+}
+
+/* text crossfade on scene switch */
+.info-fade-target {
+  transition: opacity var(--fade-ms) ease;
+}
+
+.info-panel.is-fading .info-fade-target {
+  opacity: 0;
+}
+
+/* ---------- scene switcher ---------- */
+
+.switcher {
+  pointer-events: none;
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.switch-btn {
+  pointer-events: auto;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  height: 40px;
+  padding: 0 16px;
+  border-radius: 999px;
+  border: 1px solid var(--hair);
+  background: var(--glass);
+  backdrop-filter: blur(10px) saturate(1.2);
+  -webkit-backdrop-filter: blur(10px) saturate(1.2);
+  cursor: pointer;
+  position: relative;
+  transition: border-color 150ms ease;
+}
+
+.switch-btn:hover {
+  border-color: rgba(232, 228, 218, 0.4);
+}
+
+.switch-num {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--dim);
+  letter-spacing: 0.04em;
+}
+
+.switch-name {
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+.switch-btn[aria-current='true'] {
+  border-color: var(--accent);
+}
+
+.switch-btn[aria-current='true'] .switch-num,
+.switch-btn[aria-current='true'] .switch-name {
+  color: var(--accent);
+}
+
+.switch-btn[aria-current='true']::after {
+  content: '';
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  bottom: 5px;
+  height: 1px;
+  background: var(--accent);
+}
+
+.switch-btn[hidden] {
+  display: none;
+}
+
+/* ---------- hidden-UI ghost button ---------- */
+
+.ghost-show {
+  position: fixed;
+  right: calc(20px + var(--sa-right));
+  bottom: calc(20px + var(--sa-bottom));
+  z-index: 11;
+  opacity: 0.55;
+}
+
+.ghost-show:hover {
+  opacity: 1;
+}
+
+.ghost-show[hidden] {
+  display: none;
+}
+
+/* ==================================================================
+   Narrow / phone layout (< 700px)
+   ================================================================== */
+
+@media (max-width: 700px) {
+  .topbar {
+    padding: calc(18px + var(--sa-top)) calc(16px + var(--sa-right)) 0 calc(16px + var(--sa-left));
+    flex-wrap: wrap;
+  }
+
+  .brand {
+    max-width: 100%;
+  }
+
+  .brand-quote {
+    display: none;
+  }
+
+  .topbar-controls {
+    justify-content: flex-start;
+  }
+
+  .bottom-overlay {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+    padding: 0 calc(16px + var(--sa-right)) calc(16px + var(--sa-bottom)) calc(16px + var(--sa-left));
+  }
+
+  .info-panel {
+    max-width: none;
+  }
+
+  .info-header {
+    gap: 6px;
+  }
+
+  .scene-name {
+    font-size: clamp(34px, 12vw, 56px);
+  }
+
+  .scene-tagline {
+    max-width: none;
+    margin-top: 6px;
+  }
+
+  .info-toggle {
+    display: inline-flex;
+    margin-top: 10px;
+  }
+
+  .info-details {
+    margin-top: 0;
+    gap: 8px;
+    max-height: 0;
+    opacity: 0;
+    overflow: hidden;
+    transition: max-height 300ms ease, opacity 250ms ease, margin-top 300ms ease;
+  }
+
+  .info-panel.is-expanded .info-details {
+    margin-top: 10px;
+    max-height: 34vh;
+    opacity: 1;
+    overflow-y: auto;
+  }
+
+  .scene-about,
+  .scene-spec {
+    max-width: none;
+  }
+
+  .scene-about {
+    font-size: 13px;
+    line-height: 1.5;
+  }
+
+  .scene-spec {
+    row-gap: 4px;
+    padding-top: 8px;
+  }
+
+  .scene-hint {
+    margin-top: 2px;
+    font-size: 10.5px;
+  }
+
+  .switcher {
+    justify-content: stretch;
+  }
+
+  .switch-btn {
+    flex: 1 1 0;
+    justify-content: center;
+    padding: 0 8px;
+  }
+
+  .switch-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}
+
+@media (max-width: 420px) {
+  .switch-name {
+    display: none;
+  }
+
+  .switch-btn {
+    gap: 0;
+  }
+}
